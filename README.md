@@ -21,11 +21,17 @@ Open the page in Chrome or Edge (Safari and Firefox work too), click **Enter the
 - No camera? Click-and-drag (or touch-drag) with the mouse works everywhere.
 - `npm run build` produces a static site in `dist/` that you can host anywhere.
 
-## Deploy
+## Deploy (Vercel)
 
-Every push to `main` builds the game and publishes it to GitHub Pages (`.github/workflows/deploy.yml`). One-time setup: in the repo go to **Settings → Pages → Build and deployment → Source** and choose **GitHub Actions**, then re-run the workflow from the **Actions** tab. The game is then live at `https://<user>.github.io/hand-ninja/` over HTTPS, so the camera works on phones too.
+The repo is ready for [Vercel](https://vercel.com) (`vercel.json` sets the build, output and caching).
 
-**Controls:** swipe with your index finger · `Esc`/`P` pause · `S` settings · `D` performance overlay.
+1. Sign in at [vercel.com](https://vercel.com) with GitHub and choose **Add New… → Project**.
+2. Import `hand-ninja`. If it isn't listed, use **Adjust GitHub App Permissions** to give Vercel access to the repo.
+3. Keep the detected settings (Vite, `npm run build`, output `dist`) and click **Deploy**.
+
+You get an HTTPS URL like `https://hand-ninja.vercel.app`, so the camera works on laptops and phones. Every push to `main` redeploys, and other branches get preview URLs.
+
+From a terminal instead: `npx vercel` (preview) or `npx vercel --prod`.
 
 ## Game modes
 
