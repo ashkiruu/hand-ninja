@@ -117,14 +117,6 @@ function skin(fn: (u: number, v: number) => RGB) {
   return canvasTexture(paint(SKIN_W, SKIN_H, (u, v) => fn(u, 1 - v)));
 }
 
-function bump(fn: (u: number, v: number) => number) {
-  const c = paint(SKIN_W, SKIN_H, (u, v) => {
-    const g = Math.max(0, Math.min(255, fn(u, 1 - v) * 255));
-    return [g, g, g];
-  });
-  return canvasTexture(c, false);
-}
-
 const pores = (u: number, v: number, f = 90) => {
   const n = valueNoise(u * f, v * f * 0.5, f);
   return n > 0.78 ? (n - 0.78) / 0.22 : 0;
@@ -385,7 +377,6 @@ interface LatheSpec {
   size: number;
   profile: Profile;
   skin: THREE.Texture;
-  bump?: THREE.Texture;
   flesh: THREE.Texture;
   material?: Partial<THREE.MeshPhysicalMaterialParameters>;
   juice: string;
@@ -404,8 +395,6 @@ function latheFruit(spec: LatheSpec): FruitAsset {
 
   const skinMat = new THREE.MeshPhysicalMaterial({
     map: spec.skin,
-    bumpMap: spec.bump ?? null,
-    bumpScale: spec.bump ? 1.2 : 0,
     roughness: 0.5,
     clearcoat: 0.35,
     clearcoatRoughness: 0.35,
@@ -736,7 +725,6 @@ export function getCatalogue(): FruitCatalogue {
   const plumP = PROFILES.sphere(1.04);
   const strawberryP = PROFILES.strawberry();
 
-  const citrusBump = bump((u, v) => 0.5 + pores(u, v, 110) * 0.5 + (valueNoise(u * 60, v * 30, 60) - 0.5) * 0.2);
 
   const fruits: FruitAsset[] = [
     latheFruit({
@@ -778,7 +766,6 @@ export function getCatalogue(): FruitCatalogue {
       size: 0.74,
       profile: orangeP,
       skin: SKINS.orange(),
-      bump: citrusBump,
       material: { roughness: 0.55, clearcoat: 0.25 },
       flesh: citrusCap(orangeP, "#f07a00", "#fff1d6", "#ffb347", "#ff8c1a"),
       juice: "#ff9a1f",
@@ -816,7 +803,6 @@ export function getCatalogue(): FruitCatalogue {
       size: 0.66,
       profile: lemonP,
       skin: SKINS.lemon(),
-      bump: citrusBump,
       material: { roughness: 0.45, clearcoat: 0.45 },
       flesh: citrusCap(lemonP, "#f2c200", "#fffbe6", "#fff38a", "#ffe14a"),
       juice: "#ffe74d",
@@ -827,7 +813,6 @@ export function getCatalogue(): FruitCatalogue {
       size: 0.6,
       profile: limeP,
       skin: SKINS.lime(),
-      bump: citrusBump,
       material: { roughness: 0.45, clearcoat: 0.45 },
       flesh: citrusCap(limeP, "#4a9a1f", "#f2ffe0", "#c8f27a", "#93d63f"),
       juice: "#a6e85a",

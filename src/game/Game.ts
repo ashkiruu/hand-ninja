@@ -5,7 +5,7 @@ import type { Background } from "../render/Background";
 import type { Renderer } from "../render/Renderer";
 import type { TimeFx } from "../core/TimeFx";
 import type { Popups } from "../ui/Popups";
-import { type GameMode, loadBest, saveBest } from "../settings";
+import { type GameMode, loadBest, saveBest, settings } from "../settings";
 import { BOMB_SIZE, type BombParts, buildBomb, type FruitAsset, getCatalogue, POWER_COLORS, type PowerUp } from "./fruitModels";
 import type { World } from "./World";
 
@@ -256,8 +256,9 @@ export class Game {
     const W = renderer.viewW;
     const H = renderer.viewH;
     const g = H * GRAVITY;
-    // On narrow (portrait) screens, shrink fruit so a few still fit side by side.
-    const fit = THREE.MathUtils.clamp(renderer.aspect / 1.25, 0.62, 1);
+    // Player's size preference; on narrow (portrait) screens, shrink fruit so a
+    // few still fit side by side.
+    const fit = settings.value.fruitSize * THREE.MathUtils.clamp(renderer.aspect / 1.25, 0.62, 1);
 
     let obj: THREE.Object3D;
     let asset: FruitAsset | null = null;
@@ -289,14 +290,15 @@ export class Game {
       // Keep fruit toward the middle, where the camera tracks hands best,
       // and below the top edge now that they're bigger.
       const x0 = (Math.random() - 0.5) * W * 0.7;
-      const apex = H * (0.06 + Math.random() * 0.26);
+      // ...and never let the fruit's top leave the screen at the apex.
+      const apex = Math.min(H * (0.06 + Math.random() * 0.26), H * 0.5 - radius * 1.15);
       const vy = Math.sqrt(2 * g * (apex - y0));
       const tApex = vy / g;
       const xt = THREE.MathUtils.clamp(x0 + (Math.random() - 0.5) * W * 0.5, -W * 0.33, W * 0.33);
       obj.position.set(x0, y0, (Math.random() - 0.5) * 0.6);
       vel.set((xt - x0) / tApex, vy, 0);
     }
-    if (fit < 1) obj.scale.multiplyScalar(fit);
+    obj.scale.multiplyScalar(fit);
     obj.rotation.set(Math.random() * 6, Math.random() * 6, Math.random() * 6);
     const axis = new THREE.Vector3(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).normalize();
     world.root.add(obj);

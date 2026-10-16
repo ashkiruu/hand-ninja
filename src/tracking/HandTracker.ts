@@ -1,6 +1,6 @@
 import type { HandLandmarker } from "@mediapipe/tasks-vision";
 import { createHandLandmarker, type DelegatePref, type Point3 } from "./landmarkerOptions";
-import type { WorkerRequest, WorkerResponse } from "./handWorker";
+import type { Bench, WorkerRequest, WorkerResponse } from "./handWorker";
 
 export interface HandFrame {
   /** performance.now() / 1000 when the camera frame was captured for detection */
@@ -12,7 +12,18 @@ export interface HandFrame {
 export type TrackerStatus = "idle" | "camera" | "model" | "ready" | "no-camera" | "error";
 
 /** Frames sent to the worker are downscaled to this width; MediaPipe's own inputs are ≤ 224 px. */
-const WORKER_FRAME_WIDTH = 640;
+const WORKER_FRAME_WIDTH = 960;
+/**
+ * When CPU inference is this slow (ms), a second CPU worker takes alternate
+ * camera frames. Latency per frame is unchanged but the tracking rate roughly
+ * doubles, which makes the blade much smoother. Needs a 4+ core CPU.
+ */
+const HELPER_MIN_MS = 40;
+
+interface Slot {
+  worker: Worker;
+  busy: boolean;
+}
 
 /**
  * Webcam + MediaPipe HandLandmarker.
@@ -34,8 +45,10 @@ export class HandTracker {
   error = "";
   delegate: "GPU" | "CPU" | "" = "";
   mode: "worker" | "main" | "" = "";
-  /** Delegate benchmark (ms per inference) from automatic selection. */
-  bench: { cpu?: number; gpu?: number } = {};
+  /** Median ms per inference on real frames, from automatic CPU/GPU selection. */
+  bench: Bench = {};
+  /** True while the worker is still comparing CPU and GPU. */
+  choosing = false;
   inferenceMs = 0;
   detectFps = 0;
   latest: HandFrame | null = null;
@@ -43,8 +56,9 @@ export class HandTracker {
   latestAt = 0;
 
   private landmarker: HandLandmarker | null = null;
-  private worker: Worker | null = null;
-  private busy = false;
+  private slots: Slot[] = [];
+  private lastDeliveredT = -1;
+  private paths = { wasmBase: "", modelPath: "" };
   private useVideoFrame = typeof VideoFrame !== "undefined";
   private inbox: HandFrame | null = null;
   private lastVideoTime = -1;
@@ -75,12 +89,14 @@ export class HandTracker {
         audio: false,
         video: {
           facingMode: "user",
-          // MediaPipe works on ≤ 224 px crops, so 640×360 loses nothing for
-          // tracking, and webcams can usually deliver it at a higher frame
-          // rate (= lower latency) than 720p.
-          width: { ideal: 640 },
-          height: { ideal: 360 },
-          frameRate: { ideal: 60 },
+          // 960×540: enough pixels that a hand at arm's length still gives
+          // MediaPipe's 224 px landmark crop real detail, without the cost of
+          // 720p. 30 fps rather than 60: in high-fps modes webcams cap the
+          // exposure time, so in ordinary indoor light the image gets darker
+          // and noisier, and detection gets less reliable.
+          width: { ideal: 960 },
+          height: { ideal: 540 },
+          frameRate: { ideal: 30 },
         },
       });
       this.video.srcObject = stream;
@@ -114,9 +130,12 @@ export class HandTracker {
     const pref: DelegatePref | null = asked === "cpu" || asked === "gpu" || asked === "auto" ? asked : null;
     const forceMain = params.get("thread")?.toLowerCase() === "main";
 
-    // In the worker, "auto" benchmarks and usually picks the CPU so the GPU
-    // stays free for rendering.
-    if (!forceMain && workerSupported() && (await this.startWorker(wasmBase, modelPath, pref ?? "auto"))) {
+    // In the worker, "auto" compares CPU and GPU on real frames and keeps the
+    // faster one (the CPU unless the GPU is clearly faster).
+    this.paths = { wasmBase, modelPath };
+    const slot = !forceMain && workerSupported() ? await this.startWorker(pref ?? "auto", true) : null;
+    if (slot) {
+      this.slots.push(slot);
       this.mode = "worker";
       this.status = "ready";
       return true;
@@ -124,7 +143,7 @@ export class HandTracker {
 
     try {
       // On the main thread a slow CPU inference would block rendering, so prefer the GPU there.
-      const res = await createHandLandmarker(wasmBase, modelPath, false, pref ?? "gpu");
+      const res = await createHandLandmarker(wasmBase, modelPath, false, pref === "cpu" ? "CPU" : "GPU");
       this.landmarker = res.landmarker;
       this.delegate = res.delegate;
       this.mode = "main";
@@ -138,19 +157,25 @@ export class HandTracker {
     }
   }
 
-  private startWorker(wasmBase: string, modelPath: string, pref: DelegatePref): Promise<boolean> {
+  get workerCount() {
+    return this.slots.length;
+  }
+
+  /** Starts a tracking worker. The primary one reports the delegate choice; helpers only add throughput. */
+  private startWorker(pref: DelegatePref, primary: boolean): Promise<Slot | null> {
     let worker: Worker;
     try {
       worker = new Worker(new URL("./handWorker.ts", import.meta.url), { type: "module" });
     } catch (e) {
       console.warn("[HandTracker] could not create worker, using main thread", e);
-      return Promise.resolve(false);
+      return Promise.resolve(null);
     }
-    return new Promise<boolean>((resolve) => {
+    const { wasmBase, modelPath } = this.paths;
+    return new Promise<Slot | null>((resolve) => {
       const fail = (why: unknown) => {
-        console.warn("[HandTracker] worker unavailable, using main thread:", why);
+        console.warn(`[HandTracker] ${primary ? "worker unavailable, using main thread" : "helper worker unavailable"}:`, why);
         worker.terminate();
-        resolve(false);
+        resolve(null);
       };
       const timer = window.setTimeout(() => fail("timed out loading the model"), 45000);
       worker.onerror = (e) => {
@@ -161,12 +186,14 @@ export class HandTracker {
         const msg = e.data;
         if (msg.type === "ready") {
           window.clearTimeout(timer);
-          this.worker = worker;
-          this.delegate = msg.delegate;
-          this.bench = msg.bench;
-          worker.onmessage = (ev: MessageEvent<WorkerResponse>) => this.onWorkerMessage(ev.data);
+          const slot: Slot = { worker, busy: false };
+          if (primary) {
+            this.delegate = msg.delegate;
+            this.choosing = msg.choosing;
+          }
+          worker.onmessage = (ev: MessageEvent<WorkerResponse>) => this.onWorkerMessage(slot, ev.data, primary);
           worker.onerror = (ev) => console.warn("[HandTracker] worker error", ev.message);
-          resolve(true);
+          resolve(slot);
         } else if (msg.type === "error") {
           window.clearTimeout(timer);
           fail(msg.message);
@@ -176,12 +203,30 @@ export class HandTracker {
     });
   }
 
-  private onWorkerMessage(msg: WorkerResponse) {
+  private onWorkerMessage(slot: Slot, msg: WorkerResponse, primary: boolean) {
+    if (msg.type === "chosen") {
+      if (!primary) return;
+      this.delegate = msg.delegate;
+      this.bench = msg.bench;
+      this.choosing = false;
+      this.maybeAddHelper();
+      return;
+    }
     if (msg.type !== "result") return;
-    this.busy = false;
+    slot.busy = false;
     this.inferenceMs += (msg.ms - this.inferenceMs) * 0.1;
     this.countFrame();
+    // With two workers, results can arrive out of order: keep only newer ones.
+    if (msg.t <= this.lastDeliveredT) return;
+    this.lastDeliveredT = msg.t;
     this.inbox = { t: msg.t / 1000, landmarks: msg.landmarks };
+  }
+
+  private async maybeAddHelper() {
+    const cores = navigator.hardwareConcurrency ?? 2;
+    if (this.delegate !== "CPU" || (this.bench.cpu ?? 0) < HELPER_MIN_MS || cores < 4 || this.slots.length !== 1) return;
+    const helper = await this.startWorker("cpu", false);
+    if (helper) this.slots.push(helper);
   }
 
   /**
@@ -190,17 +235,18 @@ export class HandTracker {
    */
   update(nowMs: number): HandFrame | null {
     if (this.status !== "ready" || this.video.readyState < 2) return null;
-    return this.worker ? this.updateWorker(nowMs) : this.updateMain(nowMs);
+    return this.slots.length ? this.updateWorker(nowMs) : this.updateMain(nowMs);
   }
 
   private updateWorker(nowMs: number): HandFrame | null {
-    // Never queue a second frame while one is in flight: a backlog of stale
-    // frames would only add latency.
+    // Never queue a frame on a busy worker: a backlog of stale frames would
+    // only add latency. New camera frames go to an idle worker, if any.
     const vt = this.video.currentTime;
-    if (!this.busy && vt !== this.lastVideoTime) {
+    const slot = vt !== this.lastVideoTime ? this.slots.find((s) => !s.busy) : undefined;
+    if (slot) {
       this.lastVideoTime = vt;
-      this.busy = true;
-      if (!this.sendVideoFrame(nowMs)) this.sendBitmap(nowMs);
+      slot.busy = true;
+      if (!this.sendVideoFrame(slot, nowMs)) this.sendBitmap(slot, nowMs);
     }
     const res = this.inbox;
     this.inbox = null;
@@ -212,12 +258,12 @@ export class HandTracker {
   }
 
   /** Zero-copy path: wrap the current camera frame in a VideoFrame and transfer it. */
-  private sendVideoFrame(nowMs: number) {
-    if (!this.useVideoFrame || !this.worker) return false;
+  private sendVideoFrame(slot: Slot, nowMs: number) {
+    if (!this.useVideoFrame) return false;
     let frame: VideoFrame | null = null;
     try {
       frame = new VideoFrame(this.video, { timestamp: Math.round(nowMs * 1000) });
-      this.worker.postMessage({ type: "frame", frame, t: nowMs } satisfies WorkerRequest, [frame]);
+      slot.worker.postMessage({ type: "frame", frame, t: nowMs } satisfies WorkerRequest, [frame]);
       return true;
     } catch (e) {
       console.warn("[HandTracker] VideoFrame transfer unsupported, using ImageBitmap", e);
@@ -227,17 +273,14 @@ export class HandTracker {
     }
   }
 
-  private sendBitmap(nowMs: number) {
+  private sendBitmap(slot: Slot, nowMs: number) {
     const w = this.video.videoWidth;
     const h = this.video.videoHeight;
     const scale = Math.min(1, WORKER_FRAME_WIDTH / w);
     const opts: ImageBitmapOptions = scale < 1 ? { resizeWidth: Math.round(w * scale), resizeHeight: Math.round(h * scale), resizeQuality: "low" } : {};
     createImageBitmap(this.video, opts)
-      .then((frame) => {
-        if (!this.worker) return frame.close();
-        this.worker.postMessage({ type: "frame", frame, t: nowMs } satisfies WorkerRequest, [frame]);
-      })
-      .catch(() => (this.busy = false));
+      .then((frame) => slot.worker.postMessage({ type: "frame", frame, t: nowMs } satisfies WorkerRequest, [frame]))
+      .catch(() => (slot.busy = false));
   }
 
   private updateMain(nowMs: number): HandFrame | null {

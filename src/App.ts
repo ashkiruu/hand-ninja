@@ -31,7 +31,9 @@ const INDEX_BLEND: [number, number][] = [
   [7, 0.3],
   [6, 0.15],
 ];
-const HAND_LOST_PAUSE = 1.2; // s without a hand before auto-pausing
+const HAND_LOST_HINT = 0.35; // s without a hand before the in-game "show your hand" hint
+const HAND_LOST_PAUSE = 2.5; // s without a hand before auto-pausing
+const HAND_BACK_RESUME = 0.5; // s of steady tracking before auto-resuming a hand-lost pause
 
 export class App {
   private renderer: Renderer;
@@ -56,6 +58,8 @@ export class App {
   private lastMode: GameMode = "classic";
   private last = performance.now() / 1000;
   private handMissing = 0;
+  private handBack = 0;
+  private pauseReason: "manual" | "hand" = "manual";
   private wasLive = false;
   private emberClock = 0;
   private fps = 60;
@@ -228,6 +232,7 @@ export class App {
   }
 
   private endGame() {
+    this.ui.handHint(false);
     if (this.game) {
       this.game.dispose();
       this.game = null;
@@ -248,9 +253,12 @@ export class App {
     ]);
   }
 
-  private pause(hint: string) {
+  private pause(hint: string, reason: "manual" | "hand" = "manual") {
     if (this.state !== "playing" || !this.game) return;
     this.state = "paused";
+    this.pauseReason = reason;
+    this.handBack = 0;
+    this.ui.handHint(false);
     this.audio.stopFuse();
     this.audio.setMusic("menu");
     this.ui.setPauseHint(hint);
@@ -369,6 +377,10 @@ export class App {
       this.game.update(realDt, dt, this.blade);
       if (this.game) this.ui.updateHud(this.game);
       this.checkHandLost(realDt);
+    } else if (this.state === "paused" && this.pauseReason === "hand" && !this.ui.settingsOpen) {
+      // Hand-lost pauses resume by themselves once the hand is steadily back.
+      this.handBack = this.blade.source === "hand" && this.blade.visible ? this.handBack + realDt : 0;
+      if (this.handBack > HAND_BACK_RESUME) this.resume();
     }
     if (this.state === "title" || this.state === "paused" || this.state === "results") {
       if (!this.ui.settingsOpen) this.menu.update(realDt, this.blade);
@@ -396,7 +408,7 @@ export class App {
       s.showDebug
         ? [
             `render   ${this.fps.toFixed(0)} fps  @ ${r.pixelRatio.toFixed(2)}× res${this.governor.current.msaa ? " + MSAA" : ""}`,
-            `tracking ${this.tracker.detectFps.toFixed(0)} fps  ${this.tracker.inferenceMs.toFixed(1)} ms  ${this.tracker.delegate || "-"} · ${this.tracker.mode || "-"}`,
+            `tracking ${this.tracker.detectFps.toFixed(0)} fps  ${this.tracker.inferenceMs.toFixed(1)} ms  ${this.tracker.choosing ? "comparing CPU/GPU" : this.tracker.delegate || "-"} · ${this.tracker.mode || "-"}${this.tracker.workerCount > 1 ? ` ×${this.tracker.workerCount}` : ""}`,
             `bench    cpu ${fmtMs(this.tracker.bench.cpu)}  gpu ${fmtMs(this.tracker.bench.gpu)}  cam ${this.tracker.video.videoWidth}×${this.tracker.video.videoHeight}`,
             `blade    ${this.blade.source ?? "-"}  ${this.blade.speed.toFixed(2)} h/s  ${this.blade.live ? "LIVE" : "idle"}`,
             `time     ×${this.timeFx.scale.toFixed(2)}`,
@@ -409,17 +421,11 @@ export class App {
   };
 
   private checkHandLost(dt: number) {
-    if (!this.tracker.ready || this.blade.source !== "hand") {
-      this.handMissing = 0;
-      return;
-    }
-    if (this.blade.visible) {
-      this.handMissing = 0;
-      return;
-    }
-    this.handMissing += dt;
+    const missing = this.tracker.ready && this.blade.source === "hand" && !this.blade.visible;
+    this.handMissing = missing ? this.handMissing + dt : 0;
+    this.ui.handHint(this.handMissing > HAND_LOST_HINT);
     if (this.handMissing > HAND_LOST_PAUSE && this.game?.state === "playing") {
-      this.pause("Hand lost: <b>show your hand</b> to the camera, then slice <b>Resume</b>");
+      this.pause("Hand lost: <b>show your hand</b> to the camera and the game continues", "hand");
     }
   }
 

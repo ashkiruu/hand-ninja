@@ -129,15 +129,15 @@ export class World {
         vx: Math.cos(a) * 1.4,
         vy: Math.sin(a) * 1.4,
         life: 0.35 + Math.random() * 0.25,
-        size: size * (1.2 + Math.random() * 1.4),
-        sizeEnd: size * 2.6,
+        size: size * (1.0 + Math.random() * 1.1),
+        sizeEnd: size * 2.1,
         color,
-        intensity: 0.35,
+        intensity: 0.22,
         drag: 3,
       });
     }
     // white-hot flash at the cut
-    this.glow.emit({ x, y, z: 1, vx: 0, vy: 0, life: 0.12, size: size * 2.4, sizeEnd: size * 3.2, color: WHITE, intensity: 1.1 });
+    this.glow.emit({ x, y, z: 1, vx: 0, vy: 0, life: 0.1, size: size * 1.7, sizeEnd: size * 2.3, color: WHITE, intensity: 0.75 });
   }
 
   /** Bright sparks (criticals, bomb fuse, power-ups). */

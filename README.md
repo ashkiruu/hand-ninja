@@ -38,7 +38,7 @@ From a terminal instead: `npx vercel` (preview) or `npx vercel --prod`.
 - **Classic:** endless and gets harder over time. Miss 3 fruit or hit 1 bomb and the game is over.
 - **Arcade:** 60 seconds. Bombs cost 10 points. Glowing bananas give power-ups: **Freeze** (slow motion, timer paused), **Frenzy** (fruit thrown in from both sides) and **Double Score**.
 
-Both modes have combos (3+ fruit in one swipe), random **Critical** hits on fast swipes, and a best score saved per mode.
+Both modes have combos (3+ fruit in one swipe), random **Critical** hits on fast swipes, and a best score saved per mode. **Fruit size** is adjustable in Settings.
 
 ## How the hand tracking works
 
@@ -49,8 +49,9 @@ Webcam (30–60 Hz) ─► Web Worker: MediaPipe HandLandmarker (CPU/GPU) ─►
    ─► Blade (60–120 Hz) ─► swept segment-vs-circle slicing
 ```
 
-- **CPU or GPU, chosen per device:** in the worker, MediaPipe is benchmarked on the CPU (XNNPACK) and, if that's slow, on the GPU. The CPU is preferred whenever it keeps up, because the GPU is busy rendering the game and sharing it causes frame hitches.
-- **Light camera mode:** the webcam is requested at 640×360 and up to 60 fps. MediaPipe never uses more than ~224 px crops, and lower modes give webcams higher frame rates, which means lower latency.
+- **CPU or GPU, chosen per device on real frames:** the worker loads MediaPipe on both the CPU (XNNPACK) and the GPU, alternates between them on the first real camera frames (stopping early once one is clearly slower), and keeps the faster one. The GPU must be clearly faster to win, because it's also busy rendering the game.
+- **More throughput on slow CPUs:** if CPU inference takes 40 ms or more on a 4+ core machine, a second worker takes alternate camera frames. Latency per frame is the same, but the tracking rate roughly doubles, which makes the blade much smoother.
+- **Camera mode:** 960×540 at 30 fps. That's enough pixels for a hand at arm's length to give MediaPipe's landmark crop real detail. 30 fps rather than 60 because high-fps modes cap exposure, which makes the image darker and detection less reliable indoors.
 - **Off the main thread:** each new camera frame is captured as a downscaled `ImageBitmap` and transferred to a Web Worker that runs MediaPipe, with one frame in flight at a time (no backlog of stale frames). Rendering never waits for inference, so a slow detection costs tracking rate, not frame rate. If module workers or `OffscreenCanvas` aren't available, it falls back to running on the main thread automatically. The model is warmed up during the loading screen, so the first real frame isn't slow.
 - **Latency-aware timing:** results are stamped with the frame's *capture* time, which drives filtering and prediction, so inference latency is compensated. *Arrival* time drives "is the hand still there", with a timeout that adapts to the measured detection rate.
 - **Smoothing without lag:** a 2D [One Euro filter](https://gery.casiez.net/1euro/) adapts its cutoff to speed, so a resting hand is steady and a fast swipe passes through almost unfiltered.
@@ -59,7 +60,7 @@ Webcam (30–60 Hz) ─► Web Worker: MediaPipe HandLandmarker (CPU/GPU) ─►
 - **No tunnelling:** fruit is tested against the segment the blade travelled this frame, not a single point, so fast swipes never pass through a fruit. Pointer input keeps every sample between frames for the same reason.
 - **Deliberate cuts only:** the blade becomes "live" only above a minimum speed (with hysteresis), so a hand hovering near a fruit doesn't slice it.
 - **Exact alignment:** the camera background and the landmark mapping share one mirror + cover-fit + zoom transform, so the glowing blade tip sits on your real fingertip.
-- **Robustness:** brief tracking dropouts (motion blur) are bridged. Large jumps are treated as glitches and don't cut. Losing your hand for more than 1.2 s pauses the game.
+- **Robustness:** brief tracking dropouts (motion blur) are bridged. Large jumps are treated as glitches and don't cut. If your hand leaves the camera, a hint appears right away. After 2.5 s the game pauses, and it resumes by itself once your hand is back.
 
 ### Tips for the best tracking
 
@@ -85,6 +86,7 @@ Each fruit is a lathe (surface of revolution) built from a 2D profile, with skin
 - **One post-processing pass:** bloom, chromatic aberration, vignette and tone mapping share a single full-screen pass. The shock-wave pass only runs for the second after a bomb.
 - **Baked background:** the procedural wood wall is rendered once into a texture on resize. Each frame only samples it and the camera.
 - **No mid-game shader compiles:** every material is compiled for the real HDR render target during loading, so the first fruit, bomb or power-up never stutters.
+- **NaN guard:** every material's output is sanitized. A single NaN pixel (some GPUs produce them in edge cases) would otherwise be smeared by the bloom blur into a flickering black square.
 - **Cheap UI:** no live backdrop blurs over the canvas, the camera preview only redraws on tracking updates, and particle buffers upload only their live range.
 
 ## Effects and audio

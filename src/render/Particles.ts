@@ -64,7 +64,7 @@ varying vec3 vColor;
 varying float vAlpha;
 void main() {
   float d = length(gl_PointCoord - 0.5);
-  float a = pow(smoothstep(0.5, 0.0, d), 1.6) * vAlpha;
+  float a = pow(clamp(1.0 - d * 2.0, 0.0, 1.0), 2.2) * vAlpha;
   if (a < 0.005) discard;
   gl_FragColor = vec4(vColor, a);
 }`;

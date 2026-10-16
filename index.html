@@ -46,6 +46,7 @@
           </div>
           <div id="powers" class="powers"></div>
         </div>
+        <div id="hand-hint" class="hand-hint" aria-live="polite">Show your hand to the camera</div>
         <button id="pause-btn" class="icon-btn" title="Pause (Esc)" aria-label="Pause">
           <svg viewBox="0 0 24 24"><rect x="6" y="5" width="4" height="14" rx="1.5" /><rect x="14" y="5" width="4" height="14" rx="1.5" /></svg>
         </button>
@@ -152,6 +153,11 @@
                 <option value="tip">Index fingertip (precise)</option>
                 <option value="palm">Palm center (steadiest)</option>
               </select>
+            </label>
+            <h3>Gameplay</h3>
+            <label>Fruit size <output data-for="fruitSize"></output>
+              <input type="range" data-key="fruitSize" min="0.8" max="1.7" step="0.05" />
+              <small>Bigger fruit are easier to hit.</small>
             </label>
             <h3>Display</h3>
             <label>Camera background <output data-for="cameraOpacity"></output>

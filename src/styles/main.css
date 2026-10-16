@@ -677,6 +677,27 @@ body {
   color: #ffd84d;
 }
 
+.hand-hint {
+  position: absolute;
+  left: 50%;
+  bottom: 28px;
+  transform: translate(-50%, 12px);
+  padding: 9px 18px;
+  border-radius: 999px;
+  font-size: 15px;
+  font-weight: 600;
+  color: #ffe2a8;
+  background: rgba(40, 20, 6, 0.86);
+  border: 1px solid rgba(255, 190, 90, 0.45);
+  opacity: 0;
+  transition: opacity 0.2s, transform 0.2s;
+}
+
+.hand-hint.on {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
 #frost {
   position: absolute;
   inset: 0;

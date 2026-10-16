@@ -28,7 +28,7 @@ void main() {
   float core = smoothstep(0.42, 0.0, e);
   float glow = smoothstep(1.0, 0.1, e);
   vec3 col = mix(uColor * 2.4, vec3(3.2, 3.2, 3.4), core);
-  float a = glow * pow(vT, 1.3) * vHeat;
+  float a = glow * pow(clamp(vT, 0.0, 1.0), 1.3) * clamp(vHeat, 0.0, 1.0);
   gl_FragColor = vec4(col * a, 1.0);
 }`;
 

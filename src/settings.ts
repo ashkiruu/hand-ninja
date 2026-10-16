@@ -5,6 +5,8 @@ export interface Settings {
   cameraOpacity: number;
   /** Zoom applied to both the camera feed and the hand mapping. >1 means less arm travel. */
   reach: number;
+  /** Size multiplier for fruit and bombs. */
+  fruitSize: number;
   /** Blade must move faster than this (screen heights / second) to cut. */
   sliceSpeed: number;
   /** One Euro filter: cutoff at rest (Hz). Lower = steadier but laggier when slow. */
@@ -26,6 +28,7 @@ export interface Settings {
 export const DEFAULT_SETTINGS: Settings = {
   cameraOpacity: 0.35,
   reach: 1.3,
+  fruitSize: 1.3,
   sliceSpeed: 1.1,
   minCutoff: 1.6,
   beta: 6,

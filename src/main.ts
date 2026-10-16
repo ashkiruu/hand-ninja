@@ -2,6 +2,7 @@ import "@fontsource/shojumaru/400.css";
 import "@fontsource-variable/outfit";
 import "./styles/main.css";
 import gsap from "gsap";
+import "./render/nanGuard";
 import { App } from "./App";
 
 // Keep UI animations on wall-clock time even if a frame is slow.

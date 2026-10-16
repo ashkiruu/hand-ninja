@@ -164,6 +164,13 @@ export class UI {
     this.frost(game.isFrozen);
   }
 
+  private handHintOn = false;
+  handHint(on: boolean) {
+    if (on === this.handHintOn) return;
+    this.handHintOn = on;
+    $("hand-hint").classList.toggle("on", on);
+  }
+
   frost(on: boolean) {
     this.frostEl.classList.toggle("on", on);
   }
@@ -239,6 +246,7 @@ export class UI {
     const fmt: Partial<Record<keyof Settings, (v: number) => string>> = {
       sliceSpeed: (v) => v.toFixed(1),
       reach: (v) => `${v.toFixed(2)}×`,
+      fruitSize: (v) => `${Math.round(v * 100)}%`,
       minCutoff: (v) => `${v.toFixed(1)} Hz`,
       beta: (v) => v.toFixed(1),
       predictionMs: (v) => `${v} ms`,
