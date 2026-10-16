@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#0b0705" />
+    <title>Hand Ninja</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='26' fill='%23e2233a'/%3E%3Ccircle cx='32' cy='32' r='26' fill='none' stroke='%231f4d1a' stroke-width='6'/%3E%3Cpath d='M6 58 L58 6' stroke='%23ffffff' stroke-width='5' stroke-linecap='round'/%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <canvas id="gl"></canvas>
+    <video id="cam" playsinline muted></video>
+
+    <div id="ui">
+      <div id="frost"></div>
+      <div id="ring-labels"></div>
+      <div id="popups"></div>
+
+      <!-- In-game HUD -->
+      <div id="hud" class="hidden">
+        <div class="hud-score">
+          <div class="score-row">
+            <svg class="score-icon" viewBox="0 0 64 64" aria-hidden="true">
+              <path d="M4 22 A28 28 0 0 0 60 22 Z" fill="#e2233a" />
+              <path d="M4 22 A28 28 0 0 0 60 22" fill="none" stroke="#2f7a22" stroke-width="5" />
+              <path d="M9 22 A23 23 0 0 0 55 22" fill="none" stroke="#c8ec9a" stroke-width="2" />
+              <g fill="#1b120e"><ellipse cx="22" cy="31" rx="2" ry="3.4" /><ellipse cx="32" cy="36" rx="2" ry="3.4" /><ellipse cx="42" cy="31" rx="2" ry="3.4" /></g>
+            </svg>
+            <span id="score">0</span>
+          </div>
+          <div class="best">Best <span id="best">0</span></div>
+        </div>
+
+        <div class="hud-right">
+          <div id="lives" class="lives">
+            <svg viewBox="0 0 40 40"><path d="M8 8 L32 32 M32 8 L8 32" /></svg>
+            <svg viewBox="0 0 40 40"><path d="M8 8 L32 32 M32 8 L8 32" /></svg>
+            <svg viewBox="0 0 40 40"><path d="M8 8 L32 32 M32 8 L8 32" /></svg>
+          </div>
+          <div id="timer" class="timer hidden">
+            <svg viewBox="0 0 100 100">
+              <circle class="track" cx="50" cy="50" r="44" />
+              <circle id="timer-arc" class="arc" cx="50" cy="50" r="44" />
+            </svg>
+            <span id="timer-text">60</span>
+          </div>
+          <div id="powers" class="powers"></div>
+        </div>
+        <button id="pause-btn" class="icon-btn" title="Pause (Esc)" aria-label="Pause">
+          <svg viewBox="0 0 24 24"><rect x="6" y="5" width="4" height="14" rx="1.5" /><rect x="14" y="5" width="4" height="14" rx="1.5" /></svg>
+        </button>
+      </div>
+
+      <!-- Splash -->
+      <section id="screen-splash" class="screen">
+        <div class="logo-wrap">
+          <h1 class="logo"><span>Hand</span><span>Ninja</span></h1>
+          <div class="logo-slash"></div>
+        </div>
+        <p class="tagline">Your hand is the blade</p>
+        <button id="start-btn" class="btn primary">Enter the Dojo</button>
+        <ul class="splash-notes">
+          <li><b>Webcam</b> tracks your index finger, which is your blade</li>
+          <li><b>Swipe fast</b> to slice. Avoid the bombs</li>
+          <li>No camera? A mouse or touch works too</li>
+        </ul>
+      </section>
+
+      <!-- Loading -->
+      <section id="screen-loading" class="screen hidden">
+        <div class="loader-blade"></div>
+        <ul class="steps">
+          <li id="step-camera"><i></i>Starting camera</li>
+          <li id="step-model"><i></i>Loading hand tracking model</li>
+          <li id="step-assets"><i></i>Preparing fruit</li>
+        </ul>
+        <p id="loading-error" class="error hidden"></p>
+      </section>
+
+      <!-- Title -->
+      <section id="screen-title" class="screen hidden title">
+        <div class="logo-wrap small">
+          <h1 class="logo"><span>Hand</span><span>Ninja</span></h1>
+          <div class="logo-slash"></div>
+        </div>
+        <div class="title-hints">
+          <p class="hint" id="title-hint">Raise your hand and <b>slice a fruit</b> to choose</p>
+          <p class="tip">Tip: stand about an arm's length from the camera, in good light, and point with your index finger</p>
+        </div>
+      </section>
+
+      <!-- Pause -->
+      <section id="screen-pause" class="screen hidden pause">
+        <h2 class="screen-title">Paused</h2>
+        <p class="hint" id="pause-hint">Slice <b>Resume</b> to continue</p>
+      </section>
+
+      <!-- Results -->
+      <section id="screen-results" class="screen hidden results">
+        <h2 class="screen-title" id="results-title">Game Over</h2>
+        <div class="result-card glass">
+          <div class="result-score">
+            <span class="label">Score</span>
+            <span id="result-score" class="value">0</span>
+            <span id="result-best" class="best-line">Best 0</span>
+            <span id="new-best" class="stamp hidden">New Best!</span>
+          </div>
+          <div class="stats">
+            <div><span id="stat-sliced">0</span><label>Fruit sliced</label></div>
+            <div><span id="stat-combo">0</span><label>Best combo</label></div>
+            <div><span id="stat-accuracy">0%</span><label>Accuracy</label></div>
+            <div><span id="stat-crit">0</span><label>Criticals</label></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Settings -->
+      <div id="settings" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+        <div class="modal-card glass">
+          <header>
+            <h2 id="settings-title">Settings</h2>
+            <button id="settings-close" class="icon-btn" aria-label="Close settings">
+              <svg viewBox="0 0 24 24"><path d="M6 6 L18 18 M18 6 L6 18" /></svg>
+            </button>
+          </header>
+          <p class="muted">Use your mouse here. These are saved on this device.</p>
+          <div class="settings-grid">
+            <h3>Hand tracking</h3>
+            <label>Blade sensitivity <output data-for="sliceSpeed"></output>
+              <input type="range" data-key="sliceSpeed" min="0.6" max="3" step="0.1" />
+              <small>Minimum swipe speed that cuts. Lower = easier to cut, but more accidental slices.</small>
+            </label>
+            <label>Reach <output data-for="reach"></output>
+              <input type="range" data-key="reach" min="1" max="1.8" step="0.05" />
+              <small>Higher = smaller arm movements cover the whole screen.</small>
+            </label>
+            <label>Steadiness <output data-for="minCutoff"></output>
+              <input type="range" data-key="minCutoff" min="0.3" max="4" step="0.1" />
+              <small>One Euro filter cutoff at rest. Lower = steadier, slightly laggier.</small>
+            </label>
+            <label>Responsiveness <output data-for="beta"></output>
+              <input type="range" data-key="beta" min="0" max="20" step="0.5" />
+              <small>How quickly smoothing turns off during fast swipes.</small>
+            </label>
+            <label>Prediction <output data-for="predictionMs"></output>
+              <input type="range" data-key="predictionMs" min="0" max="60" step="2" />
+              <small>Milliseconds of look-ahead to hide camera latency.</small>
+            </label>
+            <label class="row">Blade point
+              <select data-key="bladeLandmark">
+                <option value="index">Index fingertip</option>
+                <option value="middle">Middle fingertip</option>
+                <option value="palm">Palm center (steadiest)</option>
+              </select>
+            </label>
+            <h3>Display</h3>
+            <label>Camera background <output data-for="cameraOpacity"></output>
+              <input type="range" data-key="cameraOpacity" min="0" max="1" step="0.05" />
+            </label>
+            <label class="row"><input type="checkbox" data-key="showCameraPreview" /> Camera preview with hand skeleton</label>
+            <label class="row"><input type="checkbox" data-key="bloom" /> Glow effects</label>
+            <label class="row"><input type="checkbox" data-key="highQuality" /> High resolution + anti-aliasing</label>
+            <label class="row"><input type="checkbox" data-key="showDebug" /> Performance overlay (D)</label>
+            <h3>Audio</h3>
+            <label>Effects volume <output data-for="sfxVolume"></output>
+              <input type="range" data-key="sfxVolume" min="0" max="1" step="0.05" />
+            </label>
+            <label>Music volume <output data-for="musicVolume"></output>
+              <input type="range" data-key="musicVolume" min="0" max="1" step="0.05" />
+            </label>
+          </div>
+          <footer>
+            <button id="settings-reset" class="btn ghost">Reset to defaults</button>
+            <button id="settings-done" class="btn primary">Done</button>
+          </footer>
+        </div>
+      </div>
+
+      <!-- Hand status + camera preview -->
+      <div id="hand-panel">
+        <canvas id="pip" width="384" height="216"></canvas>
+        <div id="hand-status" class="chip"><i class="dot"></i><span id="hand-status-text">Camera off</span></div>
+      </div>
+
+      <button id="settings-btn" class="icon-btn corner" title="Settings (S)" aria-label="Settings">
+        <svg viewBox="0 0 24 24"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z" /><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z" /></svg>
+      </button>
+
+      <pre id="debug" class="hidden"></pre>
+      <div id="flash"></div>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
