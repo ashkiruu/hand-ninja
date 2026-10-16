@@ -420,6 +420,7 @@ export class App {
             `render   ${this.fps.toFixed(0)} fps  @ ${r.pixelRatio.toFixed(2)}× res${this.governor.current.msaa ? " + MSAA" : ""}`,
             `tracking ${this.tracker.detectFps.toFixed(0)} fps  ${this.tracker.inferenceMs.toFixed(1)} ms  ${this.tracker.choosing ? "comparing CPU/GPU" : this.tracker.delegate || "-"} · ${this.tracker.mode || "-"}${this.tracker.workerCount > 1 ? ` ×${this.tracker.workerCount}` : ""}`,
             `bench    cpu ${fmtMs(this.tracker.bench.cpu)}  gpu ${fmtMs(this.tracker.bench.gpu)}  cam ${this.tracker.video.videoWidth}×${this.tracker.video.videoHeight}`,
+            `rejected ${this.tracker.rejected}${this.tracker.rejectReason ? ` (last: ${this.tracker.rejectReason})` : ""}`,
             `blade    ${this.blade.source ?? "-"}  ${this.blade.speed.toFixed(2)} h/s  ${this.blade.live ? "LIVE" : "idle"}`,
             `time     ×${this.timeFx.scale.toFixed(2)}`,
           ].join("\n")

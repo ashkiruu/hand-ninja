@@ -101,8 +101,8 @@ export class Background {
   readonly mesh: THREE.Mesh;
   readonly material: THREE.ShaderMaterial;
   private videoTex: THREE.VideoTexture | null = null;
-  private frameTex: THREE.VideoFrameTexture | null = null;
-  private frame: VideoFrame | null = null;
+  private frameTex: THREE.Texture | null = null;
+  private frame: ImageBitmap | null = null;
   private woodTarget: THREE.WebGLRenderTarget;
   private bakeScene = new THREE.Scene();
   private bakeCamera = new THREE.Camera();
@@ -163,18 +163,22 @@ export class Background {
   /**
    * Show a specific camera frame (the one the hand tracker just analysed)
    * instead of the live feed, so the blade and the hand in the video line up.
-   * Takes ownership of the frame.
+   * The bitmap must be created with imageOrientation "flipY". Takes ownership.
    */
-  setFrame(frame: VideoFrame) {
+  setFrame(frame: ImageBitmap) {
     if (!this.frameTex) {
-      this.frameTex = new THREE.VideoFrameTexture();
+      this.frameTex = new THREE.Texture();
+      this.frameTex.flipY = false; // the bitmap is already flipped
       this.frameTex.minFilter = THREE.LinearFilter;
       this.frameTex.magFilter = THREE.LinearFilter;
       this.frameTex.generateMipmaps = false;
     }
     const prev = this.frame;
-    this.frameTex.setFrame(frame);
+    this.frameTex.image = frame;
+    this.frameTex.needsUpdate = true;
     this.frame = frame;
+    // The previous frame was uploaded by an earlier render (or never shown, if
+    // two arrived in one frame); either way it can be released now.
     prev?.close();
     this.material.uniforms.uVideo.value = this.frameTex;
     this.material.uniforms.uHasVideo.value = 1;

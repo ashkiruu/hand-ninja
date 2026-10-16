@@ -29,11 +29,13 @@ export async function makeLandmarker(fileset: Fileset, modelPath: string, delega
       baseOptions: { modelAssetPath: modelPath, delegate },
       runningMode: "VIDEO",
       numHands: 1,
-      // Lenient thresholds keep the hand tracked through motion blur and dim
-      // light, instead of dropping out and re-running palm detection.
-      minHandDetectionConfidence: 0.45,
-      minHandPresenceConfidence: 0.4,
-      minTrackingConfidence: 0.3,
+      // Presence is what makes MediaPipe give up on a tracked region and
+      // re-detect. Keep it above the default: set too low, tracking drifts onto
+      // the face or body after a fast movement and returns a malformed hand
+      // there (and the blade follows it).
+      minHandDetectionConfidence: 0.55,
+      minHandPresenceConfidence: 0.6,
+      minTrackingConfidence: 0.45,
     });
     // Warm-up: the first inferences compile GPU shaders / allocate buffers.
     // Do it now, behind the loading screen, not on the first real frame.

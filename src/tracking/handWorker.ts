@@ -1,18 +1,19 @@
 // Runs MediaPipe hand tracking off the main thread so inference never stalls
-// rendering. The main thread posts one camera frame at a time (a zero-copy
-// VideoFrame where supported, otherwise an ImageBitmap); results come back
-// tagged with that frame's capture time.
+// rendering. The main thread posts one camera frame at a time (an
+// ImageBitmap of the displayed video frame); results come back tagged with
+// that frame's capture time.
 //
 // With the "auto" preference the worker loads the model on both the CPU and
 // the GPU, alternates between them on the first real camera frames, keeps
 // whichever is faster on this device, and closes the other.
 
 import type { HandLandmarker } from "@mediapipe/tasks-vision";
+import { implausible, handScale, type SanityState } from "./handSanity";
 import { type Delegate, type DelegatePref, loadVision, makeLandmarker, type Point3 } from "./landmarkerOptions";
 
 export type WorkerRequest =
   | { type: "init"; wasmBase: string; modelPath: string; pref: DelegatePref }
-  | { type: "frame"; frame: ImageBitmap | VideoFrame; t: number };
+  | { type: "frame"; frame: ImageBitmap; t: number };
 
 export type Bench = { cpu?: number; gpu?: number };
 
@@ -20,7 +21,7 @@ export type WorkerResponse =
   | { type: "ready"; delegate: Delegate; choosing: boolean }
   | { type: "chosen"; delegate: Delegate; bench: Bench }
   | { type: "error"; message: string }
-  | { type: "result"; t: number; landmarks: Point3[] | null; ms: number };
+  | { type: "result"; t: number; landmarks: Point3[] | null; ms: number; rejected?: string };
 
 interface Runner {
   lm: HandLandmarker;
@@ -52,6 +53,7 @@ let runners: Runner[] = [];
 let chosen: Runner | null = null;
 let trialCount = 0;
 let trialStart = 0;
+let lastHand: SanityState | null = null;
 
 const reply = (msg: WorkerResponse) => ctx.postMessage(msg);
 
@@ -80,20 +82,29 @@ ctx.onmessage = async (e: MessageEvent<WorkerRequest>) => {
   const { frame, t } = msg;
   const runner = chosen ?? runners[trialCount++ % runners.length];
   const t0 = performance.now();
+  const aspect = frame.width / frame.height;
   let landmarks: Point3[] | null = null;
+  let rejected: string | undefined;
   try {
     // MediaPipe needs strictly increasing timestamps (per landmarker).
     const ts = Math.max(runner.lastTs + 1, t);
     runner.lastTs = ts;
     const lm = runner.lm.detectForVideo(frame, ts).landmarks?.[0];
-    if (lm) landmarks = lm.map((p) => ({ x: p.x, y: p.y, z: p.z }));
+    if (lm) {
+      const pts = lm.map((p) => ({ x: p.x, y: p.y, z: p.z }));
+      rejected = implausible(pts, aspect, t, lastHand) ?? undefined;
+      if (!rejected) {
+        landmarks = pts;
+        lastHand = { scale: handScale(pts, aspect), t };
+      }
+    }
   } catch (err) {
     console.warn("[hand worker] detect failed", err);
   } finally {
     frame.close();
   }
   const ms = performance.now() - t0;
-  reply({ type: "result", t, landmarks, ms });
+  reply({ type: "result", t, landmarks, ms, rejected });
 
   if (!chosen) {
     if (trialStart === 0) trialStart = t0;

@@ -28,6 +28,13 @@ const MAX_LEAD = 0.05;
 /** Output smoothing rate (1/s) for the hand blade: hides the camera's frame steps between detections. */
 const HAND_SMOOTH_RATE = 45;
 const MAX_HAND_JUMP = 0.6; // height units per frame; bigger hand jumps are tracking glitches, not swipes
+/**
+ * Fastest plausible hand speed between two samples (screen heights / s, after
+ * reach). Faster "movement" means tracking jumped to a different spot: treat
+ * it as the hand reappearing, so the blade never cuts a straight line across
+ * the screen.
+ */
+const MAX_HAND_SPEED = 9;
 
 /**
  * The player's blade. Works in "height units" internally (1 = screen height,
@@ -77,6 +84,7 @@ export class Blade {
   private pointerWasDown = false;
   private liveHold = 0;
   private smooth = { x: 0, y: 0 };
+  private lastRaw = { x: 0, y: 0 };
 
   /**
    * Feed a new fingertip sample (height units) captured at time `t` (s) and
@@ -85,7 +93,13 @@ export class Blade {
   feedHand(hx: number, hy: number, t: number, seen = t) {
     const gap = seen - this.lastHandSeen;
     if (this.source === "hand" && gap < HAND_TIMEOUT_MAX) this.handInterval += (gap - this.handInterval) * 0.2;
-    const reacquired = this.source !== "hand" || gap > this.handTimeout;
+    const sampleDt = Math.max(1 / 120, t - this.lastHandT);
+    const jump = Math.hypot(hx - this.lastRaw.x, hy - this.lastRaw.y);
+    const teleport = this.source === "hand" && jump > 0.12 && jump / sampleDt > MAX_HAND_SPEED;
+    this.lastRaw.x = hx;
+    this.lastRaw.y = hy;
+    if (teleport) this.teleported = true;
+    const reacquired = this.source !== "hand" || gap > this.handTimeout || teleport;
     this.lastHandSeen = seen;
     if (reacquired) {
       this.filter.reset();
@@ -106,6 +120,15 @@ export class Blade {
   }
 
   feedPointer(hx: number, hy: number, t: number, down: boolean) {
+    // While a hand is being tracked, stray mouse/touchpad movement must not
+    // steal the blade; only a press (or a hand that's gone) hands it over.
+    const handActive = this.source === "hand" && t - this.lastHandSeen < 0.5;
+    if (handActive && !down) {
+      this.pointer.x = hx;
+      this.pointer.y = hy;
+      this.pointer.down = false;
+      return;
+    }
     this.samples.push({ x: hx, y: hy, down, press: down && !this.pointer.down });
     if (this.samples.length > 256) this.samples.shift();
     this.pointer.x = hx;

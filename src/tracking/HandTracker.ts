@@ -1,4 +1,5 @@
 import type { HandLandmarker } from "@mediapipe/tasks-vision";
+import { handScale, implausible, type SanityState } from "./handSanity";
 import { createHandLandmarker, type DelegatePref, type Point3 } from "./landmarkerOptions";
 import type { Bench, WorkerRequest, WorkerResponse } from "./handWorker";
 
@@ -8,11 +9,12 @@ export interface HandFrame {
   /** Landmarks of the first hand (normalized to the raw, un-mirrored video frame), or null if no hand. */
   landmarks: Point3[] | null;
   /**
-   * The exact camera frame these landmarks came from (worker + VideoFrame path
-   * only). Showing it as the background keeps the blade and the finger in the
-   * video in sync. The receiver owns it and must close() it.
+   * The exact camera frame these landmarks came from (worker path only, stored
+   * flipped for direct upload as a texture). Showing it as the background
+   * keeps the blade and the finger in the video in sync. The receiver owns it
+   * and must close() it.
    */
-  image?: VideoFrame;
+  image?: ImageBitmap;
 }
 
 export type TrackerStatus = "idle" | "camera" | "model" | "ready" | "no-camera" | "error";
@@ -55,6 +57,9 @@ export class HandTracker {
   bench: Bench = {};
   /** True while the worker is still comparing CPU and GPU. */
   choosing = false;
+  /** Detections discarded as implausible (drifted tracking), and the last reason. */
+  rejected = 0;
+  rejectReason = "";
   inferenceMs = 0;
   detectFps = 0;
   latest: HandFrame | null = null;
@@ -65,10 +70,10 @@ export class HandTracker {
   private slots: Slot[] = [];
   private lastDeliveredT = -1;
   private paths = { wasmBase: "", modelPath: "" };
-  private useVideoFrame = typeof VideoFrame !== "undefined";
+  private lastHand: SanityState | null = null;
   private inbox: HandFrame | null = null;
   /** Clones of frames in flight, by capture time, to hand back with their results. */
-  private pendingFrames = new Map<number, VideoFrame>();
+  private pendingFrames = new Map<number, ImageBitmap>();
   /** Whether to keep frames for the synced background (set by the app). */
   keepFrames = false;
   private lastVideoTime = -1;
@@ -224,6 +229,10 @@ export class HandTracker {
     }
     if (msg.type !== "result") return;
     slot.busy = false;
+    if (msg.rejected) {
+      this.rejected++;
+      this.rejectReason = msg.rejected;
+    }
     this.inferenceMs += (msg.ms - this.inferenceMs) * 0.1;
     this.countFrame();
     const image = this.pendingFrames.get(msg.t);
@@ -269,7 +278,7 @@ export class HandTracker {
     if (slot) {
       this.lastVideoTime = vt;
       slot.busy = true;
-      if (!this.sendVideoFrame(slot, nowMs)) this.sendBitmap(slot, nowMs);
+      this.sendBitmap(slot, nowMs);
     }
     const res = this.inbox;
     this.inbox = null;
@@ -280,38 +289,35 @@ export class HandTracker {
     return res;
   }
 
-  /** Zero-copy path: wrap the current camera frame in a VideoFrame and transfer it. */
-  private sendVideoFrame(slot: Slot, nowMs: number) {
-    if (!this.useVideoFrame) return false;
-    let frame: VideoFrame | null = null;
-    try {
-      frame = new VideoFrame(this.video, { timestamp: Math.round(nowMs * 1000) });
-      // A clone shares the same pixels (no copy); it comes back with the result.
-      const keep = this.keepFrames ? frame.clone() : null;
-      try {
-        slot.worker.postMessage({ type: "frame", frame, t: nowMs } satisfies WorkerRequest, [frame]);
-      } catch (e) {
-        keep?.close();
-        throw e;
-      }
-      if (keep) this.pendingFrames.set(nowMs, keep);
-      return true;
-    } catch (e) {
-      console.warn("[HandTracker] VideoFrame transfer unsupported, using ImageBitmap", e);
-      frame?.close();
-      this.useVideoFrame = false;
-      return false;
-    }
-  }
-
+  /**
+   * Snapshot the current video frame as an ImageBitmap and transfer it to the
+   * worker. An ImageBitmap of a <video> is exactly the frame as displayed
+   * (after any crop/scale the browser applies to the camera), so landmarks
+   * are always relative to what the player sees. (A VideoFrame can instead
+   * carry the camera's raw buffer plus crop metadata, which isn't guaranteed
+   * to be interpreted the same way by every GPU path.)
+   *
+   * For the synced background, a second full-size snapshot of the same frame
+   * is kept and handed back with the result.
+   */
   private sendBitmap(slot: Slot, nowMs: number) {
     const w = this.video.videoWidth;
     const h = this.video.videoHeight;
     const scale = Math.min(1, WORKER_FRAME_WIDTH / w);
     const opts: ImageBitmapOptions = scale < 1 ? { resizeWidth: Math.round(w * scale), resizeHeight: Math.round(h * scale), resizeQuality: "low" } : {};
-    createImageBitmap(this.video, opts)
-      .then((frame) => slot.worker.postMessage({ type: "frame", frame, t: nowMs } satisfies WorkerRequest, [frame]))
-      .catch(() => (slot.busy = false));
+    // Both snapshots are requested in the same task, so they capture the same frame.
+    const detect = createImageBitmap(this.video, opts);
+    const display = this.keepFrames ? createImageBitmap(this.video, { imageOrientation: "flipY" }) : null;
+    Promise.allSettled([detect, display]).then(([d, b]) => {
+      const shown = b.status === "fulfilled" ? b.value : null;
+      if (d.status !== "fulfilled") {
+        shown?.close();
+        slot.busy = false;
+        return;
+      }
+      slot.worker.postMessage({ type: "frame", frame: d.value, t: nowMs } satisfies WorkerRequest, [d.value]);
+      if (shown) this.pendingFrames.set(nowMs, shown);
+    });
   }
 
   private updateMain(nowMs: number): HandFrame | null {
@@ -326,6 +332,16 @@ export class HandTracker {
     } catch (e) {
       console.warn("[HandTracker] detect failed", e);
       return null;
+    }
+    if (landmarks) {
+      const reason = implausible(landmarks, this.videoAspect, nowMs, this.lastHand);
+      if (reason) {
+        this.rejected++;
+        this.rejectReason = reason;
+        landmarks = null;
+      } else {
+        this.lastHand = { scale: handScale(landmarks, this.videoAspect), t: nowMs };
+      }
     }
     this.inferenceMs += (performance.now() - nowMs - this.inferenceMs) * 0.1;
     this.countFrame();
