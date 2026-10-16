@@ -7,6 +7,12 @@ export interface HandFrame {
   t: number;
   /** Landmarks of the first hand (normalized to the raw, un-mirrored video frame), or null if no hand. */
   landmarks: Point3[] | null;
+  /**
+   * The exact camera frame these landmarks came from (worker + VideoFrame path
+   * only). Showing it as the background keeps the blade and the finger in the
+   * video in sync. The receiver owns it and must close() it.
+   */
+  image?: VideoFrame;
 }
 
 export type TrackerStatus = "idle" | "camera" | "model" | "ready" | "no-camera" | "error";
@@ -61,6 +67,10 @@ export class HandTracker {
   private paths = { wasmBase: "", modelPath: "" };
   private useVideoFrame = typeof VideoFrame !== "undefined";
   private inbox: HandFrame | null = null;
+  /** Clones of frames in flight, by capture time, to hand back with their results. */
+  private pendingFrames = new Map<number, VideoFrame>();
+  /** Whether to keep frames for the synced background (set by the app). */
+  keepFrames = false;
   private lastVideoTime = -1;
   private fpsFrames = 0;
   private fpsStart = 0;
@@ -216,10 +226,23 @@ export class HandTracker {
     slot.busy = false;
     this.inferenceMs += (msg.ms - this.inferenceMs) * 0.1;
     this.countFrame();
+    const image = this.pendingFrames.get(msg.t);
+    this.pendingFrames.delete(msg.t);
     // With two workers, results can arrive out of order: keep only newer ones.
-    if (msg.t <= this.lastDeliveredT) return;
+    if (msg.t <= this.lastDeliveredT) {
+      image?.close();
+      return;
+    }
     this.lastDeliveredT = msg.t;
-    this.inbox = { t: msg.t / 1000, landmarks: msg.landmarks };
+    // Frames older than this result can only produce stale results now.
+    for (const [t, f] of this.pendingFrames) {
+      if (t < msg.t) {
+        f.close();
+        this.pendingFrames.delete(t);
+      }
+    }
+    this.inbox?.image?.close();
+    this.inbox = { t: msg.t / 1000, landmarks: msg.landmarks, image };
   }
 
   private async maybeAddHelper() {
@@ -263,7 +286,15 @@ export class HandTracker {
     let frame: VideoFrame | null = null;
     try {
       frame = new VideoFrame(this.video, { timestamp: Math.round(nowMs * 1000) });
-      slot.worker.postMessage({ type: "frame", frame, t: nowMs } satisfies WorkerRequest, [frame]);
+      // A clone shares the same pixels (no copy); it comes back with the result.
+      const keep = this.keepFrames ? frame.clone() : null;
+      try {
+        slot.worker.postMessage({ type: "frame", frame, t: nowMs } satisfies WorkerRequest, [frame]);
+      } catch (e) {
+        keep?.close();
+        throw e;
+      }
+      if (keep) this.pendingFrames.set(nowMs, keep);
       return true;
     } catch (e) {
       console.warn("[HandTracker] VideoFrame transfer unsupported, using ImageBitmap", e);

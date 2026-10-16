@@ -101,6 +101,8 @@ export class Background {
   readonly mesh: THREE.Mesh;
   readonly material: THREE.ShaderMaterial;
   private videoTex: THREE.VideoTexture | null = null;
+  private frameTex: THREE.VideoFrameTexture | null = null;
+  private frame: VideoFrame | null = null;
   private woodTarget: THREE.WebGLRenderTarget;
   private bakeScene = new THREE.Scene();
   private bakeCamera = new THREE.Camera();
@@ -156,6 +158,34 @@ export class Background {
     gl.setRenderTarget(this.woodTarget);
     gl.render(this.bakeScene, this.bakeCamera);
     gl.setRenderTarget(prev);
+  }
+
+  /**
+   * Show a specific camera frame (the one the hand tracker just analysed)
+   * instead of the live feed, so the blade and the hand in the video line up.
+   * Takes ownership of the frame.
+   */
+  setFrame(frame: VideoFrame) {
+    if (!this.frameTex) {
+      this.frameTex = new THREE.VideoFrameTexture();
+      this.frameTex.minFilter = THREE.LinearFilter;
+      this.frameTex.magFilter = THREE.LinearFilter;
+      this.frameTex.generateMipmaps = false;
+    }
+    const prev = this.frame;
+    this.frameTex.setFrame(frame);
+    this.frame = frame;
+    prev?.close();
+    this.material.uniforms.uVideo.value = this.frameTex;
+    this.material.uniforms.uHasVideo.value = 1;
+  }
+
+  /** Go back to the live camera feed. */
+  useLive() {
+    if (!this.videoTex || this.material.uniforms.uVideo.value === this.videoTex) return;
+    this.material.uniforms.uVideo.value = this.videoTex;
+    this.frame?.close();
+    this.frame = null;
   }
 
   setVideo(video: HTMLVideoElement) {

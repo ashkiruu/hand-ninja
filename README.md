@@ -60,6 +60,7 @@ Webcam (30–60 Hz) ─► Web Worker: MediaPipe HandLandmarker (CPU/GPU) ─►
 - **No tunnelling:** fruit is tested against the segment the blade travelled this frame, not a single point, so fast swipes never pass through a fruit. Pointer input keeps every sample between frames for the same reason.
 - **Deliberate cuts only:** the blade becomes "live" only above a minimum speed (with hysteresis), so a hand hovering near a fruit doesn't slice it.
 - **Exact alignment:** the camera background and the landmark mapping share one mirror + cover-fit + zoom transform, so the glowing blade tip sits on your real fingertip.
+- **Synced background:** when tracking runs at 16 fps or more, the background shows the exact camera frame the tracker analysed (a zero-copy clone of the frame sent to the worker), not the newest one. The blade and the finger in the video then stay together even mid-swipe, instead of the blade trailing the video by the tracking delay.
 - **Robustness:** brief tracking dropouts (motion blur) are bridged. Large jumps are treated as glitches and don't cut. If your hand leaves the camera, a hint appears right away. After 2.5 s the game pauses, and it resumes by itself once your hand is back.
 
 ### Tips for the best tracking

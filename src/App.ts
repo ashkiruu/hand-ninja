@@ -27,9 +27,9 @@ const PALM = [0, 5, 9, 13, 17];
 // Close to the fingertip, but far steadier than the tip landmark alone, which
 // jitters most and jumps when the finger blurs or curls.
 const INDEX_BLEND: [number, number][] = [
-  [8, 0.55],
-  [7, 0.3],
-  [6, 0.15],
+  [8, 0.7],
+  [7, 0.2],
+  [6, 0.1],
 ];
 const HAND_LOST_HINT = 0.35; // s without a hand before the in-game "show your hand" hint
 const HAND_LOST_PAUSE = 2.5; // s without a hand before auto-pausing
@@ -357,6 +357,16 @@ export class App {
     // 1. Hand tracking → blade
     const cover = coverScale(this.tracker.videoAspect, r.aspect, s.reach);
     const hf = this.tracker.update(ms);
+    // Synced background: show the camera frame the tracker analysed, so the
+    // blade lines up with the finger in the video even mid-swipe. Only when
+    // tracking is fast enough; otherwise the background would look choppy.
+    const sync = this.tracker.detectFps >= (this.tracker.keepFrames ? 13 : 16);
+    this.tracker.keepFrames = sync;
+    if (hf?.image) {
+      if (sync) this.background.setFrame(hf.image);
+      else hf.image.close();
+    }
+    if (!sync) this.background.useLive();
     if (hf) this.bladeUv = hf.landmarks ? bladePoint(hf.landmarks, s.bladeLandmark) : null;
     if (hf?.landmarks && this.bladeUv) {
       const p = this.bladeUv;

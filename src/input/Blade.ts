@@ -52,6 +52,8 @@ export class Blade {
   live = false;
   /** Smoothed speed in screen heights per second. */
   speed = 0;
+  /** 0 = fresh hand sample, 1 = about to be considered lost (always 0 for the pointer). */
+  staleness = 0;
   source: BladeSource | null = null;
 
   sliceSpeed = 1.5;
@@ -134,6 +136,7 @@ export class Blade {
     let hy = 0;
     if (this.source === "hand") {
       visible = now - this.lastHandSeen < this.handTimeout;
+      this.staleness = Math.min(1, Math.max(0, (now - this.lastHandSeen) / this.handTimeout));
       // Predict only while the hand is clearly moving: extrapolating a slow or
       // resting hand just amplifies jitter.
       const sp = Math.hypot(this.vel.x, this.vel.y);
@@ -149,6 +152,7 @@ export class Blade {
       this.smooth.x = hx;
       this.smooth.y = hy;
     } else if (isPointer) {
+      this.staleness = 0;
       visible = now - this.pointer.t < 2.5 || this.pointer.down || this.samples.length > 0;
       hx = this.pointer.x;
       hy = this.pointer.y;

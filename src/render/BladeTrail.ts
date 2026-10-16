@@ -105,7 +105,10 @@ export class BladeTrail {
       this.tip.position.set(blade.head.x * k, blade.head.y * k, Z);
       const s = blade.live ? 1.1 : 0.7;
       this.tip.scale.setScalar(s * (viewH / 14.5));
-      this.tipMat.opacity = blade.live ? 1 : 0.65;
+      // Fade the tip while tracking has briefly lost the hand, instead of
+      // leaving it frozen where the hand used to be.
+      const fade = 1 - 0.75 * blade.staleness * blade.staleness;
+      this.tipMat.opacity = (blade.live ? 1 : 0.65) * fade;
     }
 
     const pts = blade.trail;
