@@ -21,6 +21,10 @@ Open the page in Chrome or Edge (Safari and Firefox work too), click **Enter the
 - No camera? Click-and-drag (or touch-drag) with the mouse works everywhere.
 - `npm run build` produces a static site in `dist/` that you can host anywhere.
 
+## Deploy
+
+Every push to `main` builds the game and publishes it to GitHub Pages (`.github/workflows/deploy.yml`). One-time setup: in the repo go to **Settings → Pages → Build and deployment → Source** and choose **GitHub Actions**, then re-run the workflow from the **Actions** tab. The game is then live at `https://<user>.github.io/hand-ninja/` over HTTPS, so the camera works on phones too.
+
 **Controls:** swipe with your index finger · `Esc`/`P` pause · `S` settings · `D` performance overlay.
 
 ## Game modes
