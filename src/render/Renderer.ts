@@ -13,8 +13,14 @@ import {
 } from "postprocessing";
 
 /**
- * Three.js renderer + HDR post-processing stack (bloom, tone mapping,
- * vignette, shock wave, chromatic aberration) and screen shake.
+ * Three.js renderer + HDR post-processing and screen shake.
+ *
+ * Performance notes:
+ * - Bloom, chromatic aberration, vignette and tone mapping share ONE
+ *   full-screen pass. The shock-wave distortion has its own pass that is only
+ *   enabled for the second after a bomb goes off.
+ * - Resolution and MSAA are chosen by the adaptive quality governor
+ *   (see setQuality).
  *
  * Gameplay happens on the z = 0 plane. `viewW` × `viewH` is the size of the
  * visible area on that plane in world units.
@@ -28,16 +34,19 @@ export class Renderer {
   viewH = 1;
   width = 1;
   height = 1;
+  pixelRatio = 1;
+  onResize: (() => void) | null = null;
 
   private readonly camZ = 20;
   private bloom: BloomEffect;
   private chroma: ChromaticAberrationEffect;
   private shock: ShockWaveEffect;
-  private bloomPass: EffectPass;
+  private mainPass: EffectPass;
+  private shockPass: EffectPass;
+  private shockLeft = 0;
   private trauma = 0;
   private shakeTime = 0;
   private chromaAmount = 0;
-  private highQuality = true;
 
   constructor(canvas: HTMLCanvasElement) {
     this.gl = new THREE.WebGLRenderer({
@@ -65,33 +74,43 @@ export class Renderer {
     const fill = new THREE.HemisphereLight(0xffe2c4, 0x2a1408, 0.7);
     this.scene.add(key, rim, fill);
 
-    this.composer = new EffectComposer(this.gl, { frameBufferType: THREE.HalfFloatType, multisampling: 4 });
+    this.composer = new EffectComposer(this.gl, { frameBufferType: THREE.HalfFloatType, multisampling: 0 });
     this.composer.addPass(new RenderPass(this.scene, this.camera));
 
-    this.bloom = new BloomEffect({ intensity: 1.15, luminanceThreshold: 0.72, luminanceSmoothing: 0.25, mipmapBlur: true, radius: 0.72 });
+    this.chroma = new ChromaticAberrationEffect({ offset: new THREE.Vector2(0, 0), radialModulation: true, modulationOffset: 0.2 });
+    this.bloom = new BloomEffect({ intensity: 1.15, luminanceThreshold: 0.72, luminanceSmoothing: 0.25, mipmapBlur: true, radius: 0.72, levels: 6 });
     const vignette = new VignetteEffect({ offset: 0.3, darkness: 0.62 });
     const tone = new ToneMappingEffect({ mode: ToneMappingMode.ACES_FILMIC });
-    this.bloomPass = new EffectPass(this.camera, this.bloom, vignette, tone);
-    this.composer.addPass(this.bloomPass);
+    // Chromatic aberration samples the input buffer, so it goes first.
+    this.mainPass = new EffectPass(this.camera, this.chroma, this.bloom, vignette, tone);
+    this.composer.addPass(this.mainPass);
 
     this.shock = new ShockWaveEffect(this.camera, new THREE.Vector3(), { speed: 1.6, maxRadius: 0.9, waveSize: 0.22, amplitude: 0.09 });
-    this.composer.addPass(new EffectPass(this.camera, this.shock));
-
-    this.chroma = new ChromaticAberrationEffect({
-      offset: new THREE.Vector2(0.0005, 0.0005),
-      radialModulation: true,
-      modulationOffset: 0.2,
-    });
-    this.composer.addPass(new EffectPass(this.camera, this.chroma));
+    this.shockPass = new EffectPass(this.camera, this.shock);
+    this.composer.addPass(this.shockPass);
+    this.setShockPass(false);
 
     this.resize();
     window.addEventListener("resize", () => this.resize());
   }
 
-  setQuality(high: boolean, bloom: boolean) {
-    this.highQuality = high;
-    this.bloom.intensity = bloom ? 1.15 : 0;
-    this.composer.multisampling = high ? 4 : 0;
+  /** Render one frame with the shock-wave pass on and off, so both shader variants are compiled up front. */
+  prewarm() {
+    this.setShockPass(true);
+    this.composer.render(0.016);
+    this.setShockPass(false);
+    this.composer.render(0.016);
+  }
+
+  setBloom(on: boolean) {
+    this.bloom.intensity = on ? 1.15 : 0;
+  }
+
+  /** Applies a quality level from the adaptive governor. */
+  setQuality(pixelRatio: number, msaa: number) {
+    if (this.composer.multisampling !== msaa) this.composer.multisampling = msaa;
+    if (Math.abs(pixelRatio - this.pixelRatio) < 0.01) return;
+    this.pixelRatio = pixelRatio;
     this.resize();
   }
 
@@ -100,23 +119,22 @@ export class Renderer {
     const h = window.innerHeight;
     this.width = w;
     this.height = h;
-    const dpr = this.highQuality ? Math.min(window.devicePixelRatio, 2) : Math.min(window.devicePixelRatio, 1);
-    this.gl.setPixelRatio(dpr);
+    this.gl.setPixelRatio(this.pixelRatio);
     this.gl.setSize(w, h, false);
     this.composer.setSize(w, h, false);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
     this.viewH = 2 * this.camZ * Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2));
     this.viewW = this.viewH * this.camera.aspect;
+    this.onResize?.();
   }
 
   get aspect() {
     return this.width / this.height;
   }
 
-  /** Pixels-per-world-unit at z = 0 (CSS px). */
-  get pxPerUnit() {
-    return this.height / this.viewH;
+  get bufferHeight() {
+    return Math.round(this.height * this.pixelRatio);
   }
 
   addTrauma(amount: number) {
@@ -126,6 +144,14 @@ export class Renderer {
   shockwave(x: number, y: number) {
     this.shock.position.set(x, y, 0);
     this.shock.explode();
+    this.shockLeft = 1.4;
+    this.setShockPass(true);
+  }
+
+  private setShockPass(on: boolean) {
+    this.shockPass.enabled = on;
+    this.shockPass.renderToScreen = on;
+    this.mainPass.renderToScreen = !on;
   }
 
   pulseChroma(amount: number) {
@@ -150,8 +176,13 @@ export class Renderer {
     this.camera.rotation.z = Math.sin(t * 0.9) * 0.025 * s;
 
     this.chromaAmount = Math.max(0, this.chromaAmount - dt * 2.2);
-    const c = 0.0005 + this.chromaAmount * 0.012;
+    const c = this.chromaAmount * 0.012;
     this.chroma.offset.set(c, c * 0.6);
+
+    if (this.shockLeft > 0) {
+      this.shockLeft -= dt;
+      if (this.shockLeft <= 0) this.setShockPass(false);
+    }
 
     this.composer.render(dt);
   }

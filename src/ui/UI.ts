@@ -269,7 +269,8 @@ export class UI {
     this.handPanel.classList.toggle("hidden", !v);
   }
 
-  drawPreview(video: HTMLVideoElement, landmarks: Point3[] | null, tipIndex: number) {
+  /** `blade` is the point driving the blade, in raw normalized video coordinates. */
+  drawPreview(video: HTMLVideoElement, landmarks: Point3[] | null, blade: { x: number; y: number } | null) {
     if (this.pip.classList.contains("hidden") || video.readyState < 2) return;
     const ctx = this.pipCtx;
     const w = this.pip.width;
@@ -312,13 +313,15 @@ export class UI {
         ctx.arc(px(l), py(l), 2, 0, Math.PI * 2);
         ctx.fill();
       }
-      if (tipIndex >= 0) {
-        const t = landmarks[tipIndex];
-        ctx.fillStyle = "#5fdcff";
-        ctx.shadowColor = "#5fdcff";
-        ctx.shadowBlur = 10;
+      if (blade) {
+        const b = { x: blade.x, y: blade.y, z: 0 };
+        ctx.fillStyle = "rgba(95, 220, 255, 0.35)";
         ctx.beginPath();
-        ctx.arc(px(t), py(t), 5, 0, Math.PI * 2);
+        ctx.arc(px(b), py(b), 9, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = "#5fdcff";
+        ctx.beginPath();
+        ctx.arc(px(b), py(b), 4.5, 0, Math.PI * 2);
         ctx.fill();
       }
     }

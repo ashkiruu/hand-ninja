@@ -81,7 +81,7 @@ export class World {
 
     whole.parent?.remove(whole);
     this.juice(pos.x, pos.y, info, asset.juice, asset.size * k);
-    this.splats.add(pos.x, pos.y, asset.splat, asset.size * k * (3 + Math.random() * 1.2));
+    this.splats.add(pos.x, pos.y, asset.splat, asset.size * k * (2.3 + Math.random() * 0.9));
   }
 
   /** Juice spray: droplets flung mostly along the swipe plus a radial burst and fine mist. */

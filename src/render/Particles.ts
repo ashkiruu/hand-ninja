@@ -77,6 +77,7 @@ export class Particles {
   readonly points: THREE.Points;
   private readonly max: number;
   private count = 0;
+  private uploaded = 0;
   private time = 0;
 
   private pos: Float32Array;
@@ -193,9 +194,15 @@ export class Particles {
     }
     const g = this.points.geometry;
     g.setDrawRange(0, this.count);
+    if (this.count === 0 && this.uploaded === 0) return;
+    // Only upload the live part of each buffer.
     for (const name of ["position", "aColor", "aSize", "aAlpha"]) {
-      (g.getAttribute(name) as THREE.BufferAttribute).needsUpdate = true;
+      const attr = g.getAttribute(name) as THREE.BufferAttribute;
+      attr.clearUpdateRanges();
+      attr.addUpdateRange(0, Math.max(1, this.count) * attr.itemSize);
+      attr.needsUpdate = true;
     }
+    this.uploaded = this.count;
   }
 
   clear() {

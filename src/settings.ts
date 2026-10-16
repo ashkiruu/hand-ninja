@@ -13,8 +13,8 @@ export interface Settings {
   beta: number;
   /** How far ahead (ms) to extrapolate the fingertip to hide camera latency. */
   predictionMs: number;
-  /** Which landmark drives the blade. */
-  bladeLandmark: "index" | "middle" | "palm";
+  /** What drives the blade: steady blend along the index finger, the raw fingertip, or the palm. */
+  bladeLandmark: "index" | "tip" | "palm";
   bloom: boolean;
   highQuality: boolean;
   sfxVolume: number;
@@ -25,9 +25,9 @@ export interface Settings {
 
 export const DEFAULT_SETTINGS: Settings = {
   cameraOpacity: 0.35,
-  reach: 1.2,
-  sliceSpeed: 1.5,
-  minCutoff: 1.4,
+  reach: 1.3,
+  sliceSpeed: 1.1,
+  minCutoff: 1.6,
   beta: 6,
   predictionMs: 22,
   bladeLandmark: "index",
@@ -39,7 +39,7 @@ export const DEFAULT_SETTINGS: Settings = {
   showDebug: false,
 };
 
-const KEY = "handninja.settings.v1";
+const KEY = "handninja.settings.v2";
 
 type Listener = (s: Settings) => void;
 

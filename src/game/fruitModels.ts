@@ -12,6 +12,9 @@ import { canvasTexture, fbm, glowTexture, hexRgb, makeCanvas, mix, paint, rand, 
 
 export type PowerUp = "freeze" | "frenzy" | "double";
 
+/** Global size multiplier for everything thrown (fruit, bananas, bombs). */
+export const FRUIT_SCALE = 1.4;
+
 export interface FruitAsset {
   id: string;
   /** World scale applied to the unit-size model. */
@@ -417,6 +420,7 @@ function latheFruit(spec: LatheSpec): FruitAsset {
     metalness: 0,
   });
 
+  const size = spec.size * FRUIT_SCALE;
   // Centroid of a half-solid of revolution sits ~4r/3π ≈ 0.42r from the cut.
   const offset = 0.4 * rmax;
 
@@ -428,14 +432,14 @@ function latheFruit(spec: LatheSpec): FruitAsset {
     inner.position.x = shiftX;
     children.forEach((c) => inner.add(c));
     outer.add(inner);
-    outer.scale.setScalar(spec.size);
+    outer.scale.setScalar(size);
     return outer;
   };
 
   return {
     id: spec.id,
-    size: spec.size,
-    hitRadius: spec.size * 1.08,
+    size,
+    hitRadius: size * 1.1,
     juice: new THREE.Color(spec.juice),
     splat: new THREE.Color(spec.splat),
     halfOffset: offset,
@@ -603,7 +607,7 @@ function bananaAsset(power: PowerUp): FruitAsset {
     roughness: 0.35,
     side: THREE.DoubleSide,
   });
-  const size = 0.95;
+  const size = 0.95 * FRUIT_SCALE;
   const halo = () => {
     const s = new THREE.Sprite(
       new THREE.SpriteMaterial({ map: glowTexture(), color: glow, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0.85 }),
@@ -656,7 +660,7 @@ export interface BombParts {
 
 let bombCache: { body: THREE.BufferGeometry; neck: THREE.BufferGeometry; fuse: THREE.BufferGeometry; mats: THREE.Material[] } | null = null;
 
-export const BOMB_SIZE = 0.78;
+export const BOMB_SIZE = 0.78 * FRUIT_SCALE;
 
 export function buildBomb(): THREE.Object3D {
   if (!bombCache) {

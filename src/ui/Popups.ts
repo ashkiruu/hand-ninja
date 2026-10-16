@@ -53,7 +53,7 @@ export class Popups {
     this.root.appendChild(el);
     return gsap
       .timeline({ onComplete: () => el.remove() })
-      .fromTo(el, { scale: 2.4, opacity: 0, filter: "blur(12px)" }, { scale: 1, opacity: 1, filter: "blur(0px)", duration: 0.32, ease: "power3.out" })
+      .fromTo(el, { scale: 2.4, opacity: 0 }, { scale: 1, opacity: 1, duration: 0.32, ease: "power3.out" })
       .to(el, { scale: 0.92, opacity: 0, duration: 0.3, ease: "power2.in" }, `+=${hold}`);
   }
 

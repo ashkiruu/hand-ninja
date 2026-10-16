@@ -3,7 +3,7 @@ import gsap from "gsap";
 import type { Blade } from "../input/Blade";
 import type { Renderer } from "../render/Renderer";
 import { ringTexture } from "../render/textures";
-import { getCatalogue, type FruitAsset } from "./fruitModels";
+import { FRUIT_SCALE, getCatalogue, type FruitAsset } from "./fruitModels";
 import type { World } from "./World";
 import type { AudioEngine } from "../audio/AudioEngine";
 import type { TimeFx } from "../core/TimeFx";
@@ -126,7 +126,7 @@ export class Menu {
     it.ring.position.set(x, y, -0.5);
     it.fruit.position.set(x, y, 0);
     // Round fruit fill the ring's inner circle; the long, thin banana can be bigger.
-    const display = it.asset.power ? 1.4 : 1.12;
+    const display = (it.asset.power ? 1.4 : 1.12) / FRUIT_SCALE;
     it.fruit.scale.setScalar(it.asset.size * display * it.scale * unit);
     const p = this.renderer.worldToPixels(x, y - it.radius * 1.12);
     it.label.style.left = `${p.x}px`;

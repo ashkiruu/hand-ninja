@@ -44,6 +44,10 @@ export interface GameResult {
 export type GameState = "countdown" | "playing" | "ending" | "done";
 
 const ARCADE_TIME = 60;
+/** Gravity in screen heights / s². Lower than a mouse game: hands need more time to line up a swipe. */
+const GRAVITY = 0.9;
+/** Extra hit margin around fruit (world units at the reference view height), since hand aim is imprecise. */
+const HIT_SLACK = 0.32;
 const MAX_MISSES = 3;
 const POWER_TIME: Record<PowerUp, number> = { freeze: 5, frenzy: 5, double: 7 };
 
@@ -88,7 +92,7 @@ export class Game {
   ) {
     this.mode = mode;
     this.best = loadBest(mode);
-    deps.world.gravity = deps.renderer.viewH * 1.05;
+    deps.world.gravity = deps.renderer.viewH * GRAVITY;
   }
 
   get isFrozen() {
@@ -98,7 +102,7 @@ export class Game {
   /** Called every frame. `realDt` is wall time, `dt` is scaled game time. */
   update(realDt: number, dt: number, blade: Blade) {
     const { renderer, world } = this.deps;
-    const g = renderer.viewH * 1.05;
+    const g = renderer.viewH * GRAVITY;
     world.gravity = g;
 
     if (this.state === "countdown") this.updateCountdown(realDt);
@@ -222,7 +226,7 @@ export class Game {
   private scheduleWave(d: number): number {
     const arcade = this.mode === "arcade";
     const r = Math.random();
-    const maxFruit = Math.round(1 + d * 4 + (arcade ? 1 : 0));
+    const maxFruit = Math.round(1 + d * 3.5 + (arcade ? 1 : 0));
     const count = 1 + Math.floor(Math.random() * maxFruit);
     let pattern: "burst" | "stagger" | "single";
     if (count === 1) pattern = "single";
@@ -251,7 +255,9 @@ export class Game {
     const { renderer, world } = this.deps;
     const W = renderer.viewW;
     const H = renderer.viewH;
-    const g = H * 1.05;
+    const g = H * GRAVITY;
+    // On narrow (portrait) screens, shrink fruit so a few still fit side by side.
+    const fit = THREE.MathUtils.clamp(renderer.aspect / 1.25, 0.62, 1);
 
     let obj: THREE.Object3D;
     let asset: FruitAsset | null = null;
@@ -259,18 +265,18 @@ export class Game {
     let bomb: BombParts | undefined;
     if (p.kind === "bomb") {
       obj = buildBomb();
-      radius = BOMB_SIZE * 1.05;
+      radius = BOMB_SIZE * 1.05 * fit;
       bomb = obj.userData.parts as BombParts;
     } else if (p.kind === "fruit") {
       const list = this.catalogue.fruits;
       asset = list[Math.floor(Math.random() * list.length)];
       obj = asset.whole();
-      radius = asset.hitRadius;
+      radius = asset.hitRadius * fit;
       this.stats.thrown++;
     } else {
       asset = this.catalogue.bananas[p.kind];
       obj = asset.whole();
-      radius = asset.hitRadius;
+      radius = asset.hitRadius * fit;
     }
 
     const vel = new THREE.Vector3();
@@ -280,14 +286,17 @@ export class Game {
       vel.set(-p.side * H * (0.45 + Math.random() * 0.3), H * (0.5 + Math.random() * 0.35), 0);
     } else {
       const y0 = -H / 2 - 1.4;
-      const x0 = (Math.random() - 0.5) * W * 0.8;
-      const apex = H * (0.1 + Math.random() * 0.3);
+      // Keep fruit toward the middle, where the camera tracks hands best,
+      // and below the top edge now that they're bigger.
+      const x0 = (Math.random() - 0.5) * W * 0.7;
+      const apex = H * (0.06 + Math.random() * 0.26);
       const vy = Math.sqrt(2 * g * (apex - y0));
       const tApex = vy / g;
-      const xt = THREE.MathUtils.clamp(x0 + (Math.random() - 0.5) * W * 0.55, -W * 0.38, W * 0.38);
+      const xt = THREE.MathUtils.clamp(x0 + (Math.random() - 0.5) * W * 0.5, -W * 0.33, W * 0.33);
       obj.position.set(x0, y0, (Math.random() - 0.5) * 0.6);
       vel.set((xt - x0) / tApex, vy, 0);
     }
+    if (fit < 1) obj.scale.multiplyScalar(fit);
     obj.rotation.set(Math.random() * 6, Math.random() * 6, Math.random() * 6);
     const axis = new THREE.Vector3(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).normalize();
     world.root.add(obj);
@@ -298,7 +307,7 @@ export class Game {
 
   private handleCuts(blade: Blade) {
     const { world, audio, renderer, time, popups } = this.deps;
-    const slack = 0.12 * (renderer.viewH / 14.5);
+    const slack = HIT_SLACK * (renderer.viewH / 14.5);
     let whooshed = false;
 
     for (let i = this.thrown.length - 1; i >= 0; i--) {

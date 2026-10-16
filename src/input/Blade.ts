@@ -23,6 +23,10 @@ interface PointerSample {
 const HAND_TIMEOUT_MIN = 0.25;
 const HAND_TIMEOUT_MAX = 0.8;
 const TRAIL_LIFE = 0.13; // s
+/** Max look-ahead for hand prediction (s). Longer leads overshoot when a swipe stops or turns. */
+const MAX_LEAD = 0.05;
+/** Output smoothing rate (1/s) for the hand blade: hides the camera's frame steps between detections. */
+const HAND_SMOOTH_RATE = 45;
 const MAX_HAND_JUMP = 0.6; // height units per frame; bigger hand jumps are tracking glitches, not swipes
 
 /**
@@ -70,6 +74,7 @@ export class Blade {
   private samples: PointerSample[] = [];
   private pointerWasDown = false;
   private liveHold = 0;
+  private smooth = { x: 0, y: 0 };
 
   /**
    * Feed a new fingertip sample (height units) captured at time `t` (s) and
@@ -129,9 +134,20 @@ export class Blade {
     let hy = 0;
     if (this.source === "hand") {
       visible = now - this.lastHandSeen < this.handTimeout;
-      const lead = Math.min(0.1, Math.max(0, now - this.lastHandT + this.predictionMs / 1000));
+      // Predict only while the hand is clearly moving: extrapolating a slow or
+      // resting hand just amplifies jitter.
+      const sp = Math.hypot(this.vel.x, this.vel.y);
+      const gate = Math.min(1, Math.max(0, (sp - 0.4) / 1.2));
+      const lead = Math.min(MAX_LEAD, Math.max(0, now - this.lastHandT + this.predictionMs / 1000)) * gate;
       hx = this.filtered.x + this.vel.x * lead;
       hy = this.filtered.y + this.vel.y * lead;
+      if (this.visible && !this.teleported) {
+        const k = 1 - Math.exp(-dt * HAND_SMOOTH_RATE);
+        hx = this.smooth.x + (hx - this.smooth.x) * k;
+        hy = this.smooth.y + (hy - this.smooth.y) * k;
+      }
+      this.smooth.x = hx;
+      this.smooth.y = hy;
     } else if (isPointer) {
       visible = now - this.pointer.t < 2.5 || this.pointer.down || this.samples.length > 0;
       hx = this.pointer.x;

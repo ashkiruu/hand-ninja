@@ -1,8 +1,9 @@
 import * as THREE from "three";
 import { AudioEngine } from "./audio/AudioEngine";
+import { QualityGovernor } from "./core/QualityGovernor";
 import { TimeFx } from "./core/TimeFx";
 import { Game, type GameResult } from "./game/Game";
-import { getCatalogue } from "./game/fruitModels";
+import { buildBomb, getCatalogue } from "./game/fruitModels";
 import { Menu } from "./game/Menu";
 import { World } from "./game/World";
 import { Blade } from "./input/Blade";
@@ -11,6 +12,7 @@ import { BladeTrail } from "./render/BladeTrail";
 import { Particles } from "./render/Particles";
 import { Renderer } from "./render/Renderer";
 import { Splatters } from "./render/Splatters";
+import { glowTexture } from "./render/textures";
 import { type GameMode, loadBest, settings, type Settings } from "./settings";
 import { HandTracker } from "./tracking/HandTracker";
 import type { Point3 } from "./tracking/landmarkerOptions";
@@ -20,8 +22,15 @@ import { UI } from "./ui/UI";
 
 type AppState = "splash" | "loading" | "title" | "playing" | "paused" | "results";
 
-const TIP_INDEX: Record<Settings["bladeLandmark"], number> = { index: 8, middle: 12, palm: -1 };
 const PALM = [0, 5, 9, 13, 17];
+// "Index finger (steady)": a weighted point along the last three index joints.
+// Close to the fingertip, but far steadier than the tip landmark alone, which
+// jitters most and jumps when the finger blurs or curls.
+const INDEX_BLEND: [number, number][] = [
+  [8, 0.55],
+  [7, 0.3],
+  [6, 0.15],
+];
 const HAND_LOST_PAUSE = 1.2; // s without a hand before auto-pausing
 
 export class App {
@@ -51,7 +60,10 @@ export class App {
   private emberClock = 0;
   private fps = 60;
   private hu = { x: 0, y: 0 };
-  private quality = { high: true, bloom: true };
+  private quality: { high: boolean; bloom: boolean } | null = null;
+  private governor = new QualityGovernor();
+  private bladeUv: { x: number; y: number } | null = null;
+  private lastPreview = 0;
   private emberColor = new THREE.Color("#ff8a3a");
 
   constructor() {
@@ -62,6 +74,8 @@ export class App {
     this.world = new World(this.renderer, this.droplets, this.glow, this.smoke, this.splats);
     this.menu = new Menu(this.renderer, this.world, this.audio, this.timeFx, this.ui.ringLabelRoot);
     this.menu.onSelect = (id) => this.onMenuSelect(id);
+    this.renderer.onResize = () => this.onResize();
+    this.governor.onChange = (q) => this.renderer.setQuality(q.pixelRatio, q.msaa);
 
     const { scene } = this.renderer;
     this.embers.points.position.z = -1.5;
@@ -77,7 +91,6 @@ export class App {
     this.ui.setHandPanelVisible(false);
 
     this.bindInput(canvas);
-    window.addEventListener("resize", () => this.onResize());
     document.addEventListener("visibilitychange", () => {
       if (document.hidden && this.state === "playing") this.pause("Slice <b>Resume</b> to continue");
     });
@@ -122,21 +135,31 @@ export class App {
     }
     this.ui.setHandPanelVisible(true);
     this.applySettings(settings.value);
+    this.governor.setEnabled(true);
     this.showTitle();
   }
 
-  /** Build every fruit once and compile all shaders up front so the first slice doesn't hitch. */
+  /**
+   * Compile every shader the game will need before play starts, so nothing
+   * compiles (and stutters) mid-swipe. Shaders must be compiled for the
+   * composer's linear HDR render target: compiling for the screen produces
+   * different variants (sRGB output) that the game never uses.
+   */
   private warmUp() {
+    const r = this.renderer;
     const cat = getCatalogue();
     const tmp = new THREE.Group();
-    for (const a of [...cat.fruits, ...Object.values(cat.bananas)]) {
-      tmp.add(a.whole(), ...a.halves());
-    }
-    tmp.position.set(0, -1000, 0);
-    this.renderer.scene.add(tmp);
-    this.renderer.gl.compile(this.renderer.scene, this.renderer.camera);
-    this.renderer.render(0.016);
-    this.renderer.scene.remove(tmp);
+    for (const a of [...cat.fruits, ...Object.values(cat.bananas)]) tmp.add(a.whole(), ...a.halves());
+    tmp.add(buildBomb());
+    // Same material setups as menu rings / juice stains.
+    tmp.add(new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({ map: glowTexture(), transparent: true, depthWrite: false })));
+    r.scene.add(tmp);
+    const prev = r.gl.getRenderTarget();
+    r.gl.setRenderTarget(r.composer.inputBuffer);
+    r.gl.compile(r.scene, r.camera);
+    r.gl.setRenderTarget(prev);
+    r.prewarm();
+    r.scene.remove(tmp);
   }
 
   // ------------------------------------------------------------------ states
@@ -296,18 +319,17 @@ export class App {
     this.blade.predictionMs = s.predictionMs;
     this.blade.filter.minCutoff = s.minCutoff;
     this.blade.filter.beta = s.beta;
-    if (s.highQuality !== this.quality.high || s.bloom !== this.quality.bloom) {
-      this.quality = { high: s.highQuality, bloom: s.bloom };
-      this.renderer.setQuality(s.highQuality, s.bloom);
-      this.onResize();
-    }
+    if (!this.quality || s.highQuality !== this.quality.high) this.governor.configure(s.highQuality);
+    if (!this.quality || s.bloom !== this.quality.bloom) this.renderer.setBloom(s.bloom);
+    this.quality = { high: s.highQuality, bloom: s.bloom };
     this.audio.setVolumes(s.sfxVolume, s.musicVolume);
     this.ui.setPreviewVisible(s.showCameraPreview && this.tracker.video.readyState >= 2);
   }
 
   private onResize() {
-    const size = this.renderer.gl.getDrawingBufferSize(new THREE.Vector2());
-    for (const p of [this.droplets, this.glow, this.embers, this.smoke]) p.setScale(size.y, this.renderer.camera.fov);
+    const r = this.renderer;
+    this.background.bake(r.gl, r.width, r.height);
+    for (const p of [this.droplets, this.glow, this.embers, this.smoke]) p.setScale(r.bufferHeight, r.camera.fov);
     this.menu.layout();
   }
 
@@ -316,8 +338,10 @@ export class App {
   private frame = (ms: number) => {
     requestAnimationFrame(this.frame);
     const now = ms / 1000;
-    const realDt = Math.min(0.05, Math.max(0, now - this.last));
+    const rawDt = now - this.last;
+    const realDt = Math.min(0.05, Math.max(0, rawDt));
     this.last = now;
+    this.governor.sample(rawDt);
     if (realDt > 0) this.fps += (1 / realDt - this.fps) * 0.05;
     const s = settings.value;
     const r = this.renderer;
@@ -325,8 +349,9 @@ export class App {
     // 1. Hand tracking → blade
     const cover = coverScale(this.tracker.videoAspect, r.aspect, s.reach);
     const hf = this.tracker.update(ms);
-    if (hf?.landmarks) {
-      const p = bladePoint(hf.landmarks, s.bladeLandmark);
+    if (hf) this.bladeUv = hf.landmarks ? bladePoint(hf.landmarks, s.bladeLandmark) : null;
+    if (hf?.landmarks && this.bladeUv) {
+      const p = this.bladeUv;
       videoToHeightUnits(p.x, p.y, cover, r.aspect, this.hu);
       this.blade.feedHand(this.hu.x, this.hu.y, hf.t, now);
     }
@@ -358,16 +383,21 @@ export class App {
     this.updateEmbers(realDt);
     this.splats.update(realDt);
     this.trail.update(this.blade, r.viewH);
-    this.background.update(now, r.aspect, cover, this.tracker.ready || this.tracker.video.readyState >= 2 ? s.cameraOpacity : 0);
+    this.background.update(r.aspect, cover, this.tracker.video.readyState >= 2 ? s.cameraOpacity : 0);
 
     // 3. UI
     this.updateHandStatus();
-    if (s.showCameraPreview) this.ui.drawPreview(this.tracker.video, this.tracker.latest?.landmarks ?? null, TIP_INDEX[s.bladeLandmark]);
+    // The preview only needs redrawing when tracking updates (≤ 15 Hz otherwise).
+    if (s.showCameraPreview && (hf || now - this.lastPreview > 1 / 15)) {
+      this.lastPreview = now;
+      this.ui.drawPreview(this.tracker.video, this.tracker.latest?.landmarks ?? null, this.bladeUv);
+    }
     this.ui.debug(
       s.showDebug
         ? [
-            `render   ${this.fps.toFixed(0)} fps`,
+            `render   ${this.fps.toFixed(0)} fps  @ ${r.pixelRatio.toFixed(2)}× res${this.governor.current.msaa ? " + MSAA" : ""}`,
             `tracking ${this.tracker.detectFps.toFixed(0)} fps  ${this.tracker.inferenceMs.toFixed(1)} ms  ${this.tracker.delegate || "-"} · ${this.tracker.mode || "-"}`,
+            `bench    cpu ${fmtMs(this.tracker.bench.cpu)}  gpu ${fmtMs(this.tracker.bench.gpu)}  cam ${this.tracker.video.videoWidth}×${this.tracker.video.videoHeight}`,
             `blade    ${this.blade.source ?? "-"}  ${this.blade.speed.toFixed(2)} h/s  ${this.blade.live ? "LIVE" : "idle"}`,
             `time     ×${this.timeFx.scale.toFixed(2)}`,
           ].join("\n")
@@ -400,7 +430,14 @@ export class App {
     else if (t.status === "model") this.ui.handStatus("searching", "Loading hand model…");
     else if (t.status === "no-camera" || t.status === "error") this.ui.handStatus("off", "No camera · mouse mode");
     else if (t.ready) {
-      if (t.latest?.landmarks && performance.now() - t.latestAt < 500) this.ui.handStatus("ok", `Hand tracked · ${t.detectFps.toFixed(0)} fps`);
+      if (t.latest?.landmarks && performance.now() - t.latestAt < 500) {
+        // Webcams drop their frame rate in dim light (longer exposure), the most
+        // common cause of laggy tracking. Only blame the light when inference is
+        // fast, i.e. the camera (not the device) is the bottleneck.
+        const fps = t.detectFps;
+        const cameraLimited = fps > 0 && fps < 20 && t.inferenceMs < 35;
+        this.ui.handStatus("ok", cameraLimited ? `Hand tracked · ${fps.toFixed(0)} fps · more light helps` : `Hand tracked · ${fps.toFixed(0)} fps`);
+      }
       else this.ui.handStatus("searching", "Show your hand to the camera");
     }
   }
@@ -439,9 +476,17 @@ function bladePoint(lm: Point3[], which: Settings["bladeLandmark"]) {
     }
     return { x: x / PALM.length, y: y / PALM.length };
   }
-  const l = lm[TIP_INDEX[which]];
-  return { x: l.x, y: l.y };
+  if (which === "tip") return { x: lm[8].x, y: lm[8].y };
+  let x = 0;
+  let y = 0;
+  for (const [i, w] of INDEX_BLEND) {
+    x += lm[i].x * w;
+    y += lm[i].y * w;
+  }
+  return { x, y };
 }
+
+const fmtMs = (v: number | undefined) => (v === undefined ? "-" : Number.isFinite(v) ? `${v.toFixed(1)}ms` : "n/a");
 
 const nextFrame = () => new Promise<void>((r) => requestAnimationFrame(() => r()));
 const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));

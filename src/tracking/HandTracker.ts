@@ -1,5 +1,5 @@
 import type { HandLandmarker } from "@mediapipe/tasks-vision";
-import { createHandLandmarker, type Point3 } from "./landmarkerOptions";
+import { createHandLandmarker, type DelegatePref, type Point3 } from "./landmarkerOptions";
 import type { WorkerRequest, WorkerResponse } from "./handWorker";
 
 export interface HandFrame {
@@ -34,6 +34,8 @@ export class HandTracker {
   error = "";
   delegate: "GPU" | "CPU" | "" = "";
   mode: "worker" | "main" | "" = "";
+  /** Delegate benchmark (ms per inference) from automatic selection. */
+  bench: { cpu?: number; gpu?: number } = {};
   inferenceMs = 0;
   detectFps = 0;
   latest: HandFrame | null = null;
@@ -43,6 +45,7 @@ export class HandTracker {
   private landmarker: HandLandmarker | null = null;
   private worker: Worker | null = null;
   private busy = false;
+  private useVideoFrame = typeof VideoFrame !== "undefined";
   private inbox: HandFrame | null = null;
   private lastVideoTime = -1;
   private fpsFrames = 0;
@@ -72,8 +75,11 @@ export class HandTracker {
         audio: false,
         video: {
           facingMode: "user",
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
+          // MediaPipe works on ≤ 224 px crops, so 640×360 loses nothing for
+          // tracking, and webcams can usually deliver it at a higher frame
+          // rate (= lower latency) than 720p.
+          width: { ideal: 640 },
+          height: { ideal: 360 },
           frameRate: { ideal: 60 },
         },
       });
@@ -102,19 +108,23 @@ export class HandTracker {
     this.status = "model";
     const wasmBase = new URL("mediapipe/wasm", document.baseURI).href;
     const modelPath = new URL("models/hand_landmarker.task", document.baseURI).href;
-    // Diagnostics / escape hatches for unusual GPUs: ?delegate=cpu, ?thread=main
+    // Diagnostics / escape hatches: ?delegate=cpu|gpu|auto, ?thread=main
     const params = new URLSearchParams(location.search);
-    const preferCpu = params.get("delegate")?.toLowerCase() === "cpu";
+    const asked = params.get("delegate")?.toLowerCase();
+    const pref: DelegatePref | null = asked === "cpu" || asked === "gpu" || asked === "auto" ? asked : null;
     const forceMain = params.get("thread")?.toLowerCase() === "main";
 
-    if (!forceMain && workerSupported() && (await this.startWorker(wasmBase, modelPath, preferCpu))) {
+    // In the worker, "auto" benchmarks and usually picks the CPU so the GPU
+    // stays free for rendering.
+    if (!forceMain && workerSupported() && (await this.startWorker(wasmBase, modelPath, pref ?? "auto"))) {
       this.mode = "worker";
       this.status = "ready";
       return true;
     }
 
     try {
-      const res = await createHandLandmarker(wasmBase, modelPath, false, preferCpu);
+      // On the main thread a slow CPU inference would block rendering, so prefer the GPU there.
+      const res = await createHandLandmarker(wasmBase, modelPath, false, pref ?? "gpu");
       this.landmarker = res.landmarker;
       this.delegate = res.delegate;
       this.mode = "main";
@@ -128,7 +138,7 @@ export class HandTracker {
     }
   }
 
-  private startWorker(wasmBase: string, modelPath: string, preferCpu: boolean): Promise<boolean> {
+  private startWorker(wasmBase: string, modelPath: string, pref: DelegatePref): Promise<boolean> {
     let worker: Worker;
     try {
       worker = new Worker(new URL("./handWorker.ts", import.meta.url), { type: "module" });
@@ -153,6 +163,7 @@ export class HandTracker {
           window.clearTimeout(timer);
           this.worker = worker;
           this.delegate = msg.delegate;
+          this.bench = msg.bench;
           worker.onmessage = (ev: MessageEvent<WorkerResponse>) => this.onWorkerMessage(ev.data);
           worker.onerror = (ev) => console.warn("[HandTracker] worker error", ev.message);
           resolve(true);
@@ -161,7 +172,7 @@ export class HandTracker {
           fail(msg.message);
         }
       };
-      worker.postMessage({ type: "init", wasmBase, modelPath, preferCpu } satisfies WorkerRequest);
+      worker.postMessage({ type: "init", wasmBase, modelPath, pref } satisfies WorkerRequest);
     });
   }
 
@@ -189,16 +200,7 @@ export class HandTracker {
     if (!this.busy && vt !== this.lastVideoTime) {
       this.lastVideoTime = vt;
       this.busy = true;
-      const w = this.video.videoWidth;
-      const h = this.video.videoHeight;
-      const scale = Math.min(1, WORKER_FRAME_WIDTH / w);
-      const opts: ImageBitmapOptions = scale < 1 ? { resizeWidth: Math.round(w * scale), resizeHeight: Math.round(h * scale), resizeQuality: "low" } : {};
-      createImageBitmap(this.video, opts)
-        .then((bitmap) => {
-          if (!this.worker) return bitmap.close();
-          this.worker.postMessage({ type: "frame", bitmap, t: nowMs } satisfies WorkerRequest, [bitmap]);
-        })
-        .catch(() => (this.busy = false));
+      if (!this.sendVideoFrame(nowMs)) this.sendBitmap(nowMs);
     }
     const res = this.inbox;
     this.inbox = null;
@@ -207,6 +209,35 @@ export class HandTracker {
       this.latestAt = performance.now();
     }
     return res;
+  }
+
+  /** Zero-copy path: wrap the current camera frame in a VideoFrame and transfer it. */
+  private sendVideoFrame(nowMs: number) {
+    if (!this.useVideoFrame || !this.worker) return false;
+    let frame: VideoFrame | null = null;
+    try {
+      frame = new VideoFrame(this.video, { timestamp: Math.round(nowMs * 1000) });
+      this.worker.postMessage({ type: "frame", frame, t: nowMs } satisfies WorkerRequest, [frame]);
+      return true;
+    } catch (e) {
+      console.warn("[HandTracker] VideoFrame transfer unsupported, using ImageBitmap", e);
+      frame?.close();
+      this.useVideoFrame = false;
+      return false;
+    }
+  }
+
+  private sendBitmap(nowMs: number) {
+    const w = this.video.videoWidth;
+    const h = this.video.videoHeight;
+    const scale = Math.min(1, WORKER_FRAME_WIDTH / w);
+    const opts: ImageBitmapOptions = scale < 1 ? { resizeWidth: Math.round(w * scale), resizeHeight: Math.round(h * scale), resizeQuality: "low" } : {};
+    createImageBitmap(this.video, opts)
+      .then((frame) => {
+        if (!this.worker) return frame.close();
+        this.worker.postMessage({ type: "frame", frame, t: nowMs } satisfies WorkerRequest, [frame]);
+      })
+      .catch(() => (this.busy = false));
   }
 
   private updateMain(nowMs: number): HandFrame | null {
