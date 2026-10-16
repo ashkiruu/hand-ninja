@@ -18,7 +18,10 @@ interface PointerSample {
   press: boolean;
 }
 
-const HAND_TIMEOUT = 0.25; // s without a detection before the blade disappears
+// How long without a detection before the blade disappears: a few detection
+// intervals (measured), so slower machines don't flicker, within these bounds.
+const HAND_TIMEOUT_MIN = 0.25;
+const HAND_TIMEOUT_MAX = 0.8;
 const TRAIL_LIFE = 0.13; // s
 const MAX_HAND_JUMP = 0.6; // height units per frame; bigger hand jumps are tracking glitches, not swipes
 
@@ -57,15 +60,26 @@ export class Blade {
   private filtered = { x: 0, y: 0 };
   private lastFiltered = { x: 0, y: 0 };
   private vel = { x: 0, y: 0 };
+  /** Capture time of the latest hand sample (drives filtering and prediction). */
   private lastHandT = -1;
+  /** When the latest hand sample arrived (drives "is the hand still there" checks). */
+  private lastHandSeen = -1;
+  /** Smoothed time between hand samples (s). */
+  private handInterval = 1 / 30;
   private pointer = { x: 0, y: 0, t: -1, down: false };
   private samples: PointerSample[] = [];
   private pointerWasDown = false;
   private liveHold = 0;
 
-  /** Feed a new fingertip sample (height units) taken at time t (s). */
-  feedHand(hx: number, hy: number, t: number) {
-    const reacquired = this.source !== "hand" || t - this.lastHandT > HAND_TIMEOUT;
+  /**
+   * Feed a new fingertip sample (height units) captured at time `t` (s) and
+   * delivered at time `seen` (s). They differ by the inference latency.
+   */
+  feedHand(hx: number, hy: number, t: number, seen = t) {
+    const gap = seen - this.lastHandSeen;
+    if (this.source === "hand" && gap < HAND_TIMEOUT_MAX) this.handInterval += (gap - this.handInterval) * 0.2;
+    const reacquired = this.source !== "hand" || gap > this.handTimeout;
+    this.lastHandSeen = seen;
     if (reacquired) {
       this.filter.reset();
       this.vel.x = this.vel.y = 0;
@@ -104,7 +118,7 @@ export class Blade {
     this.segs.length = 0;
 
     // A fresh hand detection takes over unless the mouse button is held.
-    if (this.source !== "hand" && now - this.lastHandT < 0.1 && !this.pointer.down && this.lastHandT > this.pointer.t) {
+    if (this.source !== "hand" && now - this.lastHandSeen < 0.1 && !this.pointer.down && this.lastHandSeen > this.pointer.t) {
       this.source = "hand";
       this.teleported = true;
     }
@@ -114,7 +128,7 @@ export class Blade {
     let hx = 0;
     let hy = 0;
     if (this.source === "hand") {
-      visible = now - this.lastHandT < HAND_TIMEOUT;
+      visible = now - this.lastHandSeen < this.handTimeout;
       const lead = Math.min(0.1, Math.max(0, now - this.lastHandT + this.predictionMs / 1000));
       hx = this.filtered.x + this.vel.x * lead;
       hy = this.filtered.y + this.vel.y * lead;
@@ -216,6 +230,10 @@ export class Blade {
     for (let i = 0; i < n; i += 4) this.trail.push({ x: this.segs[i + 2], y: this.segs[i + 3], t: now, heat });
     if (n === 0) this.trail.push({ x: this.head.x, y: this.head.y, t: now, heat });
     this.ageTrail(now);
+  }
+
+  private get handTimeout() {
+    return Math.min(HAND_TIMEOUT_MAX, Math.max(HAND_TIMEOUT_MIN, this.handInterval * 3));
   }
 
   /** Whether the blade can cut this frame. */

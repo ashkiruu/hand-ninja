@@ -40,6 +40,7 @@ export class World {
     readonly renderer: Renderer,
     readonly droplets: Particles,
     readonly glow: Particles,
+    readonly smoke: Particles,
     readonly splats: Splatters,
   ) {}
 
@@ -167,21 +168,22 @@ export class World {
     const smoke = new THREE.Color("#2a2420");
     this.sparks(x, y, hot, 90, 18, 4);
     this.sparks(x, y, fire, 60, 10, 3);
-    for (let i = 0; i < 18; i++) {
+    for (let i = 0; i < 26; i++) {
       const a = Math.random() * Math.PI * 2;
-      const sp = 1 + Math.random() * 3;
-      this.droplets.emit({
-        x,
-        y,
+      const sp = 1 + Math.random() * 3.5;
+      this.smoke.emit({
+        x: x + Math.cos(a) * 0.3,
+        y: y + Math.sin(a) * 0.3,
         z: 0.5,
         vx: Math.cos(a) * sp,
-        vy: Math.sin(a) * sp + 1,
-        life: 1 + Math.random() * 0.8,
-        size: 0.8 + Math.random() * 1.2,
-        sizeEnd: 2.5,
+        vy: Math.sin(a) * sp + 0.8,
+        life: 1.2 + Math.random() * 1,
+        size: 1.4 + Math.random() * 1.6,
+        sizeEnd: 4 + Math.random() * 2,
         color: smoke,
-        alpha: 0.55,
-        drag: 1.5,
+        alpha: 0.5,
+        drag: 1.8,
+        gravity: -0.6,
       });
     }
     this.glow.emit({ x, y, z: 1, vx: 0, vy: 0, life: 0.5, size: 6, sizeEnd: 12, color: hot, intensity: 2.5 });

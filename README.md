@@ -37,18 +37,26 @@ Both modes have combos (3+ fruit in one swipe), random **Critical** hits on fast
 ## How the hand tracking works
 
 ```
-Webcam (30–60 Hz) ─► MediaPipe HandLandmarker (GPU) ─► fingertip (landmark 8)
+Webcam (30–60 Hz) ─► Web Worker: MediaPipe HandLandmarker (GPU) ─► fingertip (landmark 8)
    ─► mirror + cover-fit + "reach" zoom (same transform as the background video)
    ─► One Euro filter ─► velocity estimate ─► extrapolate to render time (+lead)
    ─► Blade (60–120 Hz) ─► swept segment-vs-circle slicing
 ```
 
+- **Off the main thread:** each new camera frame is captured as a downscaled `ImageBitmap` and transferred to a Web Worker that runs MediaPipe, with one frame in flight at a time (no backlog of stale frames). Rendering never waits for inference, so a slow detection costs tracking rate, not frame rate. If module workers or `OffscreenCanvas` aren't available, it falls back to running on the main thread automatically. The model is warmed up during the loading screen, so the first real frame isn't slow.
+- **Latency-aware timing:** results are stamped with the frame's *capture* time, which drives filtering and prediction, so inference latency is compensated. *Arrival* time drives "is the hand still there", with a timeout that adapts to the measured detection rate.
 - **Smoothing without lag:** a 2D [One Euro filter](https://gery.casiez.net/1euro/) adapts its cutoff to speed, so a resting hand is steady and a fast swipe passes through almost unfiltered.
 - **Camera rate ≠ screen rate:** detection runs once per camera frame. The blade is extrapolated from the filtered velocity to each render frame, with a small configurable lead to hide camera latency, so it moves at 60–120 fps.
 - **No tunnelling:** fruit is tested against the segment the blade travelled this frame, not a single point, so fast swipes never pass through a fruit. Pointer input keeps every sample between frames for the same reason.
 - **Deliberate cuts only:** the blade becomes "live" only above a minimum speed (with hysteresis), so a hand hovering near a fruit doesn't slice it.
 - **Exact alignment:** the camera background and the landmark mapping share one mirror + cover-fit + zoom transform, so the glowing blade tip sits on your real fingertip.
 - **Robustness:** brief tracking dropouts (motion blur) are bridged. Large jumps are treated as glitches and don't cut. Losing your hand for more than 1.2 s pauses the game.
+
+### Troubleshooting
+
+- Press `D` for the performance overlay: render fps, tracking fps, inference time, and `GPU · worker` (or `CPU`, `main`).
+- If tracking is erratic on your GPU, add `?delegate=cpu` to the URL to run MediaPipe on the CPU (XNNPACK).
+- Add `?thread=main` to run tracking on the main thread instead of a worker.
 
 Everything above can be tuned live in **Settings**: blade sensitivity, reach, steadiness/responsiveness (One Euro parameters), prediction, and which landmark drives the blade (index tip, middle tip or palm center).
 

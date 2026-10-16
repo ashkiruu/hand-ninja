@@ -1,5 +1,5 @@
 import gsap from "gsap";
-import type { NormalizedLandmark } from "@mediapipe/tasks-vision";
+import type { Point3 } from "../tracking/landmarkerOptions";
 import { HAND_CONNECTIONS } from "../tracking/HandTracker";
 import { settings, type Settings } from "../settings";
 import type { Game, GameResult } from "../game/Game";
@@ -269,7 +269,7 @@ export class UI {
     this.handPanel.classList.toggle("hidden", !v);
   }
 
-  drawPreview(video: HTMLVideoElement, landmarks: NormalizedLandmark[] | null, tipIndex: number) {
+  drawPreview(video: HTMLVideoElement, landmarks: Point3[] | null, tipIndex: number) {
     if (this.pip.classList.contains("hidden") || video.readyState < 2) return;
     const ctx = this.pipCtx;
     const w = this.pip.width;
@@ -296,8 +296,8 @@ export class UI {
     ctx.drawImage(video, sx, sy, sw, sh, 0, 0, w, h);
     ctx.globalAlpha = 1;
     if (landmarks) {
-      const px = (l: NormalizedLandmark) => ((l.x * video.videoWidth - sx) / sw) * w;
-      const py = (l: NormalizedLandmark) => ((l.y * video.videoHeight - sy) / sh) * h;
+      const px = (l: Point3) => ((l.x * video.videoWidth - sx) / sw) * w;
+      const py = (l: Point3) => ((l.y * video.videoHeight - sy) / sh) * h;
       ctx.strokeStyle = "rgba(255, 210, 94, 0.9)";
       ctx.lineWidth = 2;
       ctx.beginPath();

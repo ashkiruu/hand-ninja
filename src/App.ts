@@ -1,5 +1,4 @@
 import * as THREE from "three";
-import type { NormalizedLandmark } from "@mediapipe/tasks-vision";
 import { AudioEngine } from "./audio/AudioEngine";
 import { TimeFx } from "./core/TimeFx";
 import { Game, type GameResult } from "./game/Game";
@@ -14,6 +13,7 @@ import { Renderer } from "./render/Renderer";
 import { Splatters } from "./render/Splatters";
 import { type GameMode, loadBest, settings, type Settings } from "./settings";
 import { HandTracker } from "./tracking/HandTracker";
+import type { Point3 } from "./tracking/landmarkerOptions";
 import { coverScale, pixelsToHeightUnits, videoToHeightUnits } from "./tracking/mapping";
 import { Popups } from "./ui/Popups";
 import { UI } from "./ui/UI";
@@ -30,6 +30,7 @@ export class App {
   private droplets = new Particles(4000, "droplet");
   private glow = new Particles(3000, "glow");
   private embers = new Particles(300, "glow");
+  private smoke = new Particles(400, "smoke");
   private splats = new Splatters();
   private trail = new BladeTrail();
   private blade = new Blade();
@@ -58,13 +59,13 @@ export class App {
     this.renderer = new Renderer(canvas);
     this.tracker = new HandTracker(document.getElementById("cam") as HTMLVideoElement);
     this.popups = new Popups(this.ui.popupRoot, this.renderer);
-    this.world = new World(this.renderer, this.droplets, this.glow, this.splats);
+    this.world = new World(this.renderer, this.droplets, this.glow, this.smoke, this.splats);
     this.menu = new Menu(this.renderer, this.world, this.audio, this.timeFx, this.ui.ringLabelRoot);
     this.menu.onSelect = (id) => this.onMenuSelect(id);
 
     const { scene } = this.renderer;
     this.embers.points.position.z = -1.5;
-    scene.add(this.background.mesh, this.splats.group, this.embers.points, this.world.root, this.menu.group, this.droplets.points, this.glow.points, this.trail.group);
+    scene.add(this.background.mesh, this.splats.group, this.embers.points, this.world.root, this.menu.group, this.smoke.points, this.droplets.points, this.glow.points, this.trail.group);
 
     this.ui.onSettingsChange = (s) => this.applySettings(s);
     this.ui.onPauseClick = () => this.pause("Slice <b>Resume</b> to continue");
@@ -306,7 +307,7 @@ export class App {
 
   private onResize() {
     const size = this.renderer.gl.getDrawingBufferSize(new THREE.Vector2());
-    for (const p of [this.droplets, this.glow, this.embers]) p.setScale(size.y, this.renderer.camera.fov);
+    for (const p of [this.droplets, this.glow, this.embers, this.smoke]) p.setScale(size.y, this.renderer.camera.fov);
     this.menu.layout();
   }
 
@@ -327,7 +328,7 @@ export class App {
     if (hf?.landmarks) {
       const p = bladePoint(hf.landmarks, s.bladeLandmark);
       videoToHeightUnits(p.x, p.y, cover, r.aspect, this.hu);
-      this.blade.feedHand(this.hu.x, this.hu.y, hf.t);
+      this.blade.feedHand(this.hu.x, this.hu.y, hf.t, now);
     }
     this.blade.update(now, realDt, r.viewH);
 
@@ -353,6 +354,7 @@ export class App {
     this.world.update(dt);
     this.droplets.update(dt);
     this.glow.update(dt);
+    this.smoke.update(dt);
     this.updateEmbers(realDt);
     this.splats.update(realDt);
     this.trail.update(this.blade, r.viewH);
@@ -365,7 +367,7 @@ export class App {
       s.showDebug
         ? [
             `render   ${this.fps.toFixed(0)} fps`,
-            `tracking ${this.tracker.detectFps.toFixed(0)} fps  ${this.tracker.inferenceMs.toFixed(1)} ms  ${this.tracker.delegate || "-"}`,
+            `tracking ${this.tracker.detectFps.toFixed(0)} fps  ${this.tracker.inferenceMs.toFixed(1)} ms  ${this.tracker.delegate || "-"} · ${this.tracker.mode || "-"}`,
             `blade    ${this.blade.source ?? "-"}  ${this.blade.speed.toFixed(2)} h/s  ${this.blade.live ? "LIVE" : "idle"}`,
             `time     ×${this.timeFx.scale.toFixed(2)}`,
           ].join("\n")
@@ -398,7 +400,7 @@ export class App {
     else if (t.status === "model") this.ui.handStatus("searching", "Loading hand model…");
     else if (t.status === "no-camera" || t.status === "error") this.ui.handStatus("off", "No camera · mouse mode");
     else if (t.ready) {
-      if (t.latest?.landmarks && performance.now() / 1000 - t.latest.t < 0.5) this.ui.handStatus("ok", `Hand tracked · ${t.detectFps.toFixed(0)} fps`);
+      if (t.latest?.landmarks && performance.now() - t.latestAt < 500) this.ui.handStatus("ok", `Hand tracked · ${t.detectFps.toFixed(0)} fps`);
       else this.ui.handStatus("searching", "Show your hand to the camera");
     }
   }
@@ -427,7 +429,7 @@ export class App {
 }
 
 /** The landmark that drives the blade, in normalized (raw video) coordinates. */
-function bladePoint(lm: NormalizedLandmark[], which: Settings["bladeLandmark"]) {
+function bladePoint(lm: Point3[], which: Settings["bladeLandmark"]) {
   if (which === "palm") {
     let x = 0;
     let y = 0;

@@ -10,4 +10,8 @@ export default defineConfig({
     target: "es2022",
     chunkSizeWarningLimit: 2000,
   },
+  // Hand tracking runs in a module worker (MediaPipe loads its ES-module WASM glue there).
+  worker: {
+    format: "es",
+  },
 });

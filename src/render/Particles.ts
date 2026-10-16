@@ -59,6 +59,16 @@ void main() {
   gl_FragColor = vec4(vColor * a * vAlpha, 1.0);
 }`;
 
+const fragSmoke = /* glsl */ `
+varying vec3 vColor;
+varying float vAlpha;
+void main() {
+  float d = length(gl_PointCoord - 0.5);
+  float a = pow(smoothstep(0.5, 0.0, d), 1.6) * vAlpha;
+  if (a < 0.005) discard;
+  gl_FragColor = vec4(vColor, a);
+}`;
+
 /**
  * CPU-simulated particle pool rendered as a single THREE.Points draw call.
  * Dead particles are swap-removed so the live set is always [0, count).
@@ -86,7 +96,7 @@ export class Particles {
   private flutter: Float32Array;
   private material: THREE.ShaderMaterial;
 
-  constructor(max: number, kind: "droplet" | "glow") {
+  constructor(max: number, kind: "droplet" | "glow" | "smoke") {
     this.max = max;
     this.pos = new Float32Array(max * 3);
     this.col = new Float32Array(max * 3);
@@ -112,15 +122,15 @@ export class Particles {
 
     this.material = new THREE.ShaderMaterial({
       vertexShader: vert,
-      fragmentShader: kind === "droplet" ? fragDroplet : fragGlow,
+      fragmentShader: kind === "droplet" ? fragDroplet : kind === "smoke" ? fragSmoke : fragGlow,
       uniforms: { uScale: { value: 500 } },
       transparent: true,
       depthWrite: false,
-      blending: kind === "droplet" ? THREE.NormalBlending : THREE.AdditiveBlending,
+      blending: kind === "glow" ? THREE.AdditiveBlending : THREE.NormalBlending,
     });
     this.points = new THREE.Points(g, this.material);
     this.points.frustumCulled = false;
-    this.points.renderOrder = kind === "droplet" ? 5 : 10;
+    this.points.renderOrder = kind === "smoke" ? 4 : kind === "droplet" ? 5 : 10;
   }
 
   /** Call on resize: pixels-per-world-unit at distance 1 in drawing-buffer pixels. */
